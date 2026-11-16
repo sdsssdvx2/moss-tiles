@@ -1,0 +1,47 @@
+{
+  // family-invest-paper-v2: PAPER TRADING ONLY. New worker; the old
+  // family-invest-krx-paper-256fe555dc worker/D1 stay untouched as fallback.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "family-invest-paper-v2",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-20",
+  "workers_dev": true,
+  "preview_urls": false,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "family-invest-paper-v2-db",
+      "database_id": "__D1_DATABASE_ID__",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Workers AI (free 10k neurons/day, no key). AI 판단 job uses it ~4x/day (~2k neurons).
+  "ai": { "binding": "AI" },
+  "triggers": {
+    // Free plan: max 5 cron triggers per account. We use 1: every 10 minutes a small unit of work
+    // (collect / paper step / evaluation) + Telegram summary/alerts on the owner-editable schedule
+    // (dashboard 데이터·비용 → 알림 설정; default 08:40 KST daily).
+    "crons": ["*/10 * * * *"]
+  },
+  "vars": {
+    "COLLECT_ENABLED": "true",
+    "ALLOW_UNOFFICIAL_NAVER": "true",
+    "DATA_TASKS_PER_TICK": "2",
+    "KRX_BACKFILL_YEARS": "5",
+    "CRYPTO_BACKFILL_DAYS": "1100",
+    "NEWS_VETO_PROVIDER": "ai",
+    "AI_PROVIDER": "workers-ai",
+    "AI_MODEL": "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
+    "AI_FALLBACK_MODELS": "@cf/zai-org/glm-4.7-flash,@cf/google/gemma-4-26b-a4b-it",
+    "LOG_TICKS": "false",
+    // 코인 시장 신호 (위험 신호 전용). 기준값 바꾸기: MARKET_SIGNALS_JSON 예) {"premHold":0.06,"derivRules":false}
+    "MARKET_SIGNALS_ENABLED": "true",
+    // 주간 자동 연구 결과(공개 저장소, 토큰 불필요). 6시간마다 확인, 새 결과만 반영.
+    "RESEARCH_URL": "https://raw.githubusercontent.com/sdsssdvx2/moss-tiles/main/backtest/results/import.json"
+  },
+  // Secrets (set with `wrangler secret put`, never in this file):
+  //   OWNER_PASSWORD (required), KRX_AUTH_KEY, DATA_GO_KR_KEY (optional data),
+  //   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (optional), EXPORT_TOKEN, INGEST_TOKEN (optional machine APIs).
+  //   There are NO broker/exchange order keys in this project.
+  "observability": { "enabled": true, "head_sampling_rate": 1.0 }
+}

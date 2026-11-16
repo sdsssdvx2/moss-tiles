@@ -3,3 +3,4 @@ backtest/.cache/
 .wrangler/
 backtest/results/latest.json
 backtest/results/fixtures*
+wrangler.deploy.jsonc
