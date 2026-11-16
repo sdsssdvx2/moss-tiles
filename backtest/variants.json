@@ -1,0 +1,15 @@
+[
+ {
+  "id": "etf_trend_v2",
+  "base": "etf_trend_v1",
+  "version": 2,
+  "params": {
+   "sma": 100,
+   "band": 0.005,
+   "volTarget": 0.1,
+   "volN": 40
+  },
+  "trials": 11,
+  "note": "weekly research 2026-11-16"
+ }
+]
