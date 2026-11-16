@@ -196,3 +196,53 @@ test('worker fetch: login required, rate-limited login, session cookie, overview
   const ingest = await worker.fetch(new Request('https://x/api/ingest', { method: 'POST', body: '{}' }), env, ctx);
   assert.equal(ingest.status, 401);
 });
+
+test('ETF NAV: extractor captures NAV for the research universe without forward-fill; daily + backfill write signals', async () => {
+  const { krxDailyTask, krxNavBackfillTask } = await import('../src/jobs/collect.js');
+  const day = dayT('2026-11-13');
+  const row = (code, extra = {}) => ({ BAS_DD: '20261113', ISU_CD: code, TDD_OPNPRC: '100', TDD_HGPRC: '101', TDD_LWPRC: '99', TDD_CLSPRC: '100', ACC_TRDVOL: '10', NAV: '100.5', ACC_TRDVAL: '1,000', INVSTASST_NETASST_TOTAMT: '5,000', ...extra });
+  const doc = JSON.stringify({ OutBlock_1: [row('069500'), row('091160', { NAV: '' }), row('229200', { NAV: '0' }), row('148020')] });
+  const r = extractKrxRows(doc, ['069500'], day, ['069500', '091160', '229200', '148020']);
+  assert.deepEqual(Object.keys(r.bars), ['069500']);
+  assert.deepEqual(Object.keys(r.navs).sort(), ['069500', '148020']); // missing/zero NAV skipped, not filled
+  assert.deepEqual(r.navs['148020'], { nav: 100.5, c: 100, tv: 1000, na: 5000 });
+  assert.deepEqual(extractKrxRows(doc, ['069500'], day).navs, {}); // NAV capture is opt-in
+
+  // collector: official ETF day stores NAV signals for universe codes; backfill walks backwards a few days per tick
+  const db = makeD1();
+  const env = { DB: db, KRX_AUTH_KEY: 'k', ALLOW_UNOFFICIAL_NAVER: 'false', KRX_NAV_BACKFILL_YEARS: '0.02' };
+  const seen = [];
+  const fetcher = async (url) => {
+    const u = new URL(url);
+    const basDd = u.searchParams.get('basDd');
+    seen.push(`${u.pathname.split('/').pop()}:${basDd}`);
+    if (u.pathname.endsWith('stk_bydd_trd')) return Response.json({ respCode: '401' }, { status: 401 });
+    const rows = ['069500', '102110', '278530', '379800', '153130', '091160'].map((c) => row(c, { BAS_DD: basDd }));
+    return Response.json({ OutBlock_1: rows });
+  };
+  const now = kstAt(dayT('2026-11-16'), 20);
+  await krxDailyTask(env, await kvAll(db), now, { fetcher });
+  const navDays = db.raw.prepare("SELECT DISTINCT t FROM signals WHERE kind='etf_nav'").all().map((x) => x.t);
+  assert.ok(navDays.length >= 1);
+  const first = Math.min(...navDays);
+  assert.ok(db.raw.prepare("SELECT 1 FROM signals WHERE kind='etf_nav' AND sym='091160'").get(), 'research-only ETF NAV stored');
+  let kv = await kvAll(db);
+  assert.equal(kv['nav:first'], first);
+  assert.equal(await krxNavBackfillTask(env, kv, now, { fetcher }), true);
+  kv = await kvAll(db);
+  assert.ok(kv['navbf:cur'] < first);
+  const before = db.raw.prepare("SELECT COUNT(DISTINCT t) AS n FROM signals WHERE kind='etf_nav'").get().n;
+  assert.ok(before >= navDays.length + 3);
+  for (let i = 0; i < 5 && !kv['navbf:done']; i++) { await krxNavBackfillTask(env, kv, now, { fetcher }); kv = await kvAll(db); }
+  assert.equal(kv['navbf:done'], 1); // ~7 days floor reached
+  assert.equal(await krxNavBackfillTask(env, kv, now, { fetcher }), false);
+  // errors back off instead of hammering the API
+  const db2 = makeD1();
+  await db2.batch([kvSetStmt(db2, 'nav:first', first)]);
+  const bad = async () => Response.json({ respCode: '401' }, { status: 401 });
+  const env2 = { DB: db2, KRX_AUTH_KEY: 'k' };
+  assert.equal(await krxNavBackfillTask(env2, await kvAll(db2), now, { fetcher: bad }), false);
+  const kv2 = await kvAll(db2);
+  assert.ok(kv2['navbf:off'] > now + 6 * DAY);
+  assert.equal(kv2['navbf:cur'], undefined);
+});

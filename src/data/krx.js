@@ -25,34 +25,55 @@ export const KRX_ENDPOINTS = {
  * A single JSON.parse + Set lookup measured fastest in V8 (~1 ms for ~300 KB; see scripts/cpu-bench.mjs).
  * Returns {bars:{code:bar}, empty:boolean}.
  */
-export function extractKrxRows(text, codes, dayLabelT) {
+export function extractKrxRows(text, codes, dayLabelT, navCodes = null) {
   let doc;
   try { doc = JSON.parse(text); } catch { throw new Error('KRX_INVALID_JSON'); }
   const rc = doc?.respCode;
   if (rc != null && !['0', '000', '200'].includes(String(rc))) throw new Error(String(rc) === '401' || String(rc) === '403' ? 'KRX_AUTH' : `KRX_APP_${rc}`);
   const items = doc?.OutBlock_1;
   if (!Array.isArray(items)) throw new Error('KRX_FORMAT');
-  if (!items.length) return { bars: {}, empty: true };
+  if (!items.length) return { bars: {}, navs: {}, empty: true };
   const want = new Set(codes);
+  const navWant = navCodes ? new Set(navCodes) : null;
   const day = ymdCompact(dayLabelT);
   const bars = {};
+  const navs = {};
   for (const row of items) {
     let code = String(row.ISU_SRT_CD || row.ISU_CD || '');
     if (code.length === 12 && code.startsWith('KR')) code = code.slice(3, 9);
-    if (!want.has(code) || String(row.BAS_DD) !== day) continue;
+    if (String(row.BAS_DD) !== day) continue;
+    if (navWant?.has(code)) {
+      const n = navRow(row);
+      if (n) navs[code] = n;
+    }
+    if (!want.has(code)) continue;
     const b = { t: dayLabelT, o: num(row.TDD_OPNPRC), h: num(row.TDD_HGPRC), l: num(row.TDD_LWPRC), c: num(row.TDD_CLSPRC), v: num(row.ACC_TRDVOL) };
     if (validBar(b)) bars[code] = b; // halted symbols report 0 open -> skipped
   }
-  return { bars, empty: false };
+  return { bars, navs, empty: false };
 }
 
-export async function fetchKrxDay(fetcher, key, kind, dayLabelT, codes) {
+/**
+ * ETF NAV snapshot from one etf_bydd_trd row (for the ETF 괴리율 research; no trading use yet).
+ * nav: 확정 NAV(장 종료 후 공표 → t일 신호, t+1 시가 체결만 허용), c: 종가, tv: 거래대금, na: 순자산총액.
+ * Returns null when NAV or close is missing/non-positive (no forward-fill).
+ */
+export function navRow(row) {
+  const nav = num(row?.NAV);
+  const c = num(row?.TDD_CLSPRC);
+  if (!(nav > 0) || !(c > 0)) return null;
+  const tv = num(row?.ACC_TRDVAL);
+  const na = num(row?.INVSTASST_NETASST_TOTAMT);
+  return { nav, c, tv: Number.isFinite(tv) ? tv : null, na: Number.isFinite(na) ? na : null };
+}
+
+export async function fetchKrxDay(fetcher, key, kind, dayLabelT, codes, navCodes = null) {
   if (!key) throw new Error('KRX_NO_KEY');
   const res = await fetcher(`${KRX_ENDPOINTS[kind]}?basDd=${ymdCompact(dayLabelT)}`, { headers: { AUTH_KEY: key, Accept: 'application/json' }, redirect: 'manual' });
   if (res.status === 401 || res.status === 403) throw new Error('KRX_AUTH');
   if (res.status === 429) throw new Error('KRX_RATE_LIMIT');
   if (!res.ok) throw new Error(`KRX_HTTP_${res.status}`);
-  return extractKrxRows(await res.text(), codes, dayLabelT);
+  return extractKrxRows(await res.text(), codes, dayLabelT, navCodes);
 }
 
 // ---------- 공공데이터포털 ----------

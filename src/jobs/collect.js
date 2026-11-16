@@ -1,11 +1,11 @@
 // Incremental market-data collection. Small batches per cron tick (Workers Free: 10 ms CPU,
 // 50 external subrequests). Coverage cursors live in kv (no full-table scans: D1 free tier
 // enforces daily row-read limits).
-import { DAY, HOUR, latestFinalCryptoDay, latestFinalHour, latestFinalKrxDay, nextKrxBusinessDay, kstAt } from '../core/calendar.js';
+import { DAY, HOUR, latestFinalCryptoDay, latestFinalHour, latestFinalKrxDay, nextKrxBusinessDay, prevKrxBusinessDay, kstAt } from '../core/calendar.js';
 import { fetchUpbitCandles, finalOnly, fetchUpbitTop } from '../data/upbit.js';
 import { fetchKrxDay, fetchNaverDaily, fetchDataGoKrHistory } from '../data/krx.js';
 import { candleStmts, kvSetStmt, healthOk, healthErr } from '../db/store.js';
-import { CRYPTO_CORE, KRX_ETFS, KRX_STOCKS, krxMeta, CRYPTO_MAX, RETENTION } from '../config.js';
+import { CRYPTO_CORE, KRX_ETFS, KRX_STOCKS, krxMeta, CRYPTO_MAX, RETENTION, ETF_NAV_UNIVERSE } from '../config.js';
 
 export function cryptoUniverse(kv) {
   const u = kv['crypto:universe'];
@@ -27,6 +27,12 @@ async function store(env, kv, market, tf, sym, bars, src, extra = []) {
   mergeCov(cov, sym, bars);
   const stmts = [...candleStmts(env.DB, market, tf, sym, bars, src), kvSetStmt(env.DB, covKey(market, tf), cov), ...extra];
   for (let i = 0; i < stmts.length; i += 500) await env.DB.batch(stmts.slice(i, i + 500));
+}
+
+/** ETF NAV snapshots -> signals(kind 'etf_nav'). value = NAV, note = {c, tv, na} JSON. Research data only. */
+export function navStmts(db, dayLabelT, navs) {
+  const ins = db.prepare('INSERT OR REPLACE INTO signals (sym, t, kind, value, note) VALUES (?,?,?,?,?)');
+  return Object.entries(navs || {}).map(([code, n]) => ins.bind(code, dayLabelT, 'etf_nav', n.nav, JSON.stringify({ c: n.c, tv: n.tv, na: n.na })));
 }
 
 const failKey = (src, sym) => `fail:${src}:${sym}`;
@@ -144,7 +150,7 @@ export async function krxDailyTask(env, kv, now, { perTick = 6, fetcher = fetch 
         const want = codes.filter((c) => (kind === 'etf') === !!krxMeta[c].etf && (cur[c] || 0) < D);
         if (!want.length) continue;
         try {
-          const { bars, empty } = await fetchKrxDay(fetcher, env.KRX_AUTH_KEY, kind, D, want);
+          const { bars, navs, empty } = await fetchKrxDay(fetcher, env.KRX_AUTH_KEY, kind, D, want, kind === 'etf' ? ETF_NAV_UNIVERSE : null);
           did = true;
           if (empty) {
             // Not yet published (T+1 morning) or a closure the calendar missed. After D+1 15:00 KST treat as no session.
@@ -152,6 +158,10 @@ export async function krxDailyTask(env, kv, now, { perTick = 6, fetcher = fetch 
             continue;
           }
           for (const [c, b] of Object.entries(bars)) { await store(env, kv, 'krx', '1d', c, [b], 'krx'); cur[c] = Math.max(cur[c] || 0, D); }
+          if (kind === 'etf') {
+            extraStmts.push(...navStmts(env.DB, D, navs));
+            if (Object.keys(navs || {}).length && !kv['nav:first']) { kv['nav:first'] = D; extraStmts.push(kvSetStmt(env.DB, 'nav:first', D)); }
+          }
           // a symbol absent from a non-empty official day (trading halt) is considered checked
           for (const c of want) cur[c] = Math.max(cur[c] || 0, D);
           await healthOk(env.DB, `krx:${kind}`);
@@ -195,6 +205,39 @@ export async function krxDailyTask(env, kv, now, { perTick = 6, fetcher = fetch 
   const allChecked = codes.every((c) => (cur[c] || 0) >= target);
   if (allChecked) { kv['ready:krx:1d'] = target; extraStmts.push(kvSetStmt(env.DB, 'ready:krx:1d', target)); }
   await env.DB.batch(extraStmts);
+  return did;
+}
+
+/**
+ * ETF NAV history backfill from the official KRX API (one request = all ETFs for one day), walking backwards
+ * from the first collected day to KRX_NAV_BACKFILL_YEARS (default 5). A few days per tick; stops on auth errors.
+ * Empty days (holidays the calendar missed) are simply skipped — NAV is never forward-filled.
+ */
+export async function krxNavBackfillTask(env, kv, now, { perTick = 3, fetcher = fetch } = {}) {
+  if (!env.KRX_AUTH_KEY || kv['navbf:done'] || (kv['navbf:off'] || 0) > now) return false;
+  const start = kv['navbf:cur'] || kv['nav:first'];
+  if (!start) return false; // wait until the daily collector has produced the first NAV day
+  const floor = now - Number(env.KRX_NAV_BACKFILL_YEARS || 5) * 365 * DAY;
+  let D = start;
+  const stmts = [];
+  let did = false;
+  for (let i = 0; i < perTick; i++) {
+    D = prevKrxBusinessDay(D);
+    if (D < floor) { kv['navbf:done'] = 1; stmts.push(kvSetStmt(env.DB, 'navbf:done', 1)); break; }
+    try {
+      const { navs } = await fetchKrxDay(fetcher, env.KRX_AUTH_KEY, 'etf', D, [], ETF_NAV_UNIVERSE);
+      stmts.push(...navStmts(env.DB, D, navs));
+      did = true;
+    } catch (e) {
+      await healthErr(env.DB, 'krx:navbf', e);
+      const wait = String(e.message) === 'KRX_AUTH' ? 7 * DAY : HOUR;
+      kv['navbf:off'] = now + wait; stmts.push(kvSetStmt(env.DB, 'navbf:off', kv['navbf:off']));
+      D = nextKrxBusinessDay(D); // retry this day later
+      break;
+    }
+  }
+  if (D !== start) { kv['navbf:cur'] = D; stmts.push(kvSetStmt(env.DB, 'navbf:cur', D)); }
+  for (let i = 0; i < stmts.length; i += 500) await env.DB.batch(stmts.slice(i, i + 500));
   return did;
 }
 

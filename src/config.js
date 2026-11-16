@@ -31,6 +31,14 @@ export const KRX_STOCKS = {
   '015760': '한국전력',
 };
 
+// ETF 괴리율(NAV) 연구용 수집 대상: 국내 주식형 1배 20종 + 위 ETF. 가격 봉은 수집하지 않고 NAV·종가만 signals(kind 'etf_nav')에 저장.
+// 근거: 류호영·김은총(2024) ETF 가격괴리 연구 — 종가 괴리는 T+2 안에 대체로 소멸. t일 NAV 신호 → t+1 시가 체결만 허용.
+export const ETF_NAV_UNIVERSE = [...new Set([
+  '069500', '069660', '105190', '148020', '152100', '229200', '091160', '091230', '091170', '117700',
+  '102780', '161510', '210780', '211900', '104530', '279540', '251590', '227570', '100910', '278540',
+  ...Object.keys(KRX_ETFS),
+])];
+
 export const KRX_ALL = { ...KRX_ETFS, ...KRX_STOCKS };
 export const krxMeta = Object.fromEntries(Object.keys(KRX_ALL).map((s) => [s, { etf: s in KRX_ETFS, name: KRX_ALL[s] }]));
 

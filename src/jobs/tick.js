@@ -1,6 +1,6 @@
 // One cron tick = a few small units of work, in priority order.
 import { kvAll } from '../db/store.js';
-import { cryptoCandlesTask, cryptoBackfillTask, cryptoUniverseTask, krxDailyTask, krxBackfillTask, pruneHourlyTask } from './collect.js';
+import { cryptoCandlesTask, cryptoBackfillTask, cryptoUniverseTask, krxDailyTask, krxBackfillTask, krxNavBackfillTask, pruneHourlyTask } from './collect.js';
 import { paperTask, workerBacktestTask } from './paper.js';
 import { lifecycleTask } from './lifecycle.js';
 import { allocateTask } from './allocate.js';
@@ -27,6 +27,7 @@ export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher =
       ['market', () => marketSignalsTask(env, kv, now, { fetcher })],
       ['feeds', () => feedsTask(env, kv, now, { fetcher })],
       ['krxBackfill', () => krxBackfillTask(env, kv, now, { fetcher })],
+      ['krxNavBackfill', () => krxNavBackfillTask(env, kv, now, { fetcher })],
       ['cryptoBackfill1d', () => cryptoBackfillTask(env, kv, now, '1d', { fetcher })],
       ['cryptoBackfill1h', () => cryptoBackfillTask(env, kv, now, '1h', { fetcher })],
       ['prune', () => pruneHourlyTask(env, kv, now)],
