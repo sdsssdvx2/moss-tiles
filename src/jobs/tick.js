@@ -26,8 +26,6 @@ export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher =
       ['universe', () => cryptoUniverseTask(env, kv, now, { fetcher })],
       ['market', () => marketSignalsTask(env, kv, now, { fetcher })],
       ['feeds', () => feedsTask(env, kv, now, { fetcher })],
-      ['ai', () => aiTask(env, kv, now, { fetcher })],
-      ['research', () => researchPullTask(env, kv, now, { fetcher })],
       ['krxBackfill', () => krxBackfillTask(env, kv, now, { fetcher })],
       ['cryptoBackfill1d', () => cryptoBackfillTask(env, kv, now, '1d', { fetcher })],
       ['cryptoBackfill1h', () => cryptoBackfillTask(env, kv, now, '1h', { fetcher })],
@@ -35,6 +33,9 @@ export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher =
     ];
     for (const [n, f] of tasks) { if (data >= maxData) break; if (await run(n, f)) data++; }
   }
+  // AI judgment and the weekly research pull are self-throttled (6h) and mostly I/O, so they get their own slot instead
+  // of competing with the data collectors (which fill the data budget almost every tick). At most one per tick.
+  if (!(await run('ai', () => aiTask(env, kv, now, { fetcher })))) await run('research', () => researchPullTask(env, kv, now, { fetcher }));
   const changed = (await run('paper', () => paperTask(env, kv, now, { maxSteps: Number(env.PAPER_STEPS_PER_TICK || 2) }))) || [];
   if (!changed.length && data === 0) await run('workerBacktest', () => workerBacktestTask(env, kv, now));
   if ((kv['lc:at'] || 0) < now - 6 * 3600) await run('lifecycle', () => lifecycleTask(env, kv, now));
