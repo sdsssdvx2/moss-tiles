@@ -1,0 +1,17 @@
+{
+  "name": "moss-tiles",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Offline simulation notes. No live orders.",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "research": "node backtest/run.mjs --research --export backtest/results/import.json"
+  },
+  "devDependencies": {
+    "trading-signals": "^8.4.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

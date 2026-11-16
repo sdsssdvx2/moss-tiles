@@ -1,0 +1,52 @@
+{
+  "etf_trend": {
+    "count": 11,
+    "seen": [
+      "{\"sma\":150,\"band\":0.005,\"volTarget\":0.1,\"volN\":20}",
+      "{\"sma\":220,\"band\":0,\"volTarget\":0.08,\"volN\":40}",
+      "{\"sma\":250,\"band\":0,\"volTarget\":0.08,\"volN\":40}",
+      "{\"sma\":250,\"band\":0.02,\"volTarget\":0.1,\"volN\":20}",
+      "{\"sma\":100,\"band\":0.005,\"volTarget\":0.1,\"volN\":40}",
+      "{\"sma\":250,\"band\":0.005,\"volTarget\":0.15,\"volN\":20}",
+      "{\"sma\":150,\"band\":0,\"volTarget\":0.08,\"volN\":40}",
+      "{\"sma\":150,\"band\":0.01,\"volTarget\":0.15,\"volN\":20}",
+      "{\"sma\":180,\"band\":0.01,\"volTarget\":0.15,\"volN\":20}",
+      "{\"sma\":100,\"band\":0,\"volTarget\":0.12,\"volN\":20}",
+      "{\"sma\":250,\"band\":0.01,\"volTarget\":0.15,\"volN\":40}"
+    ]
+  },
+  "etf_dip": {
+    "count": 12,
+    "seen": [
+      "{\"sma\":100,\"exitSma\":3,\"maxHold\":15,\"stop\":0.05,\"rsiMax\":10,\"size\":0.5}",
+      "{\"sma\":100,\"exitSma\":5,\"maxHold\":5,\"stop\":0.08,\"rsiMax\":10,\"size\":0.5}",
+      "{\"sma\":200,\"exitSma\":5,\"maxHold\":15,\"stop\":0.08,\"rsiMax\":10,\"size\":0.3}",
+      "{\"sma\":150,\"exitSma\":3,\"maxHold\":5,\"stop\":0.08,\"rsiMax\":10,\"size\":0.3}",
+      "{\"sma\":200,\"exitSma\":3,\"maxHold\":5,\"stop\":0.08,\"rsiMax\":5,\"size\":0.5}",
+      "{\"sma\":150,\"exitSma\":5,\"maxHold\":15,\"stop\":0.12,\"rsiMax\":15,\"size\":0.5}",
+      "{\"sma\":150,\"exitSma\":3,\"maxHold\":10,\"stop\":0.05,\"rsiMax\":5,\"size\":0.3}",
+      "{\"sma\":100,\"exitSma\":5,\"maxHold\":5,\"stop\":0.12,\"rsiMax\":5,\"size\":0.3}",
+      "{\"sma\":100,\"exitSma\":5,\"maxHold\":10,\"stop\":0.12,\"rsiMax\":15,\"size\":0.3}",
+      "{\"sma\":100,\"exitSma\":3,\"maxHold\":10,\"stop\":0.08,\"rsiMax\":15,\"size\":0.3}",
+      "{\"sma\":200,\"exitSma\":5,\"maxHold\":10,\"stop\":0.08,\"rsiMax\":5,\"size\":0.5}",
+      "{\"sma\":200,\"exitSma\":7,\"maxHold\":15,\"stop\":0.05,\"rsiMax\":10,\"size\":0.3}"
+    ]
+  },
+  "crypto_trend": {
+    "count": 12,
+    "seen": [
+      "{\"filterSma\":200,\"entry\":20,\"exit\":20,\"momDays\":14,\"atrK\":3,\"volTarget\":0.2}",
+      "{\"filterSma\":100,\"entry\":20,\"exit\":30,\"momDays\":28,\"atrK\":2,\"volTarget\":0.25}",
+      "{\"filterSma\":100,\"entry\":55,\"exit\":10,\"momDays\":14,\"atrK\":3,\"volTarget\":0.25}",
+      "{\"filterSma\":200,\"entry\":80,\"exit\":20,\"momDays\":14,\"atrK\":3,\"volTarget\":0.35}",
+      "{\"filterSma\":100,\"entry\":20,\"exit\":10,\"momDays\":28,\"atrK\":2,\"volTarget\":0.35}",
+      "{\"filterSma\":200,\"entry\":55,\"exit\":10,\"momDays\":28,\"atrK\":2,\"volTarget\":0.2}",
+      "{\"filterSma\":200,\"entry\":40,\"exit\":30,\"momDays\":28,\"atrK\":3,\"volTarget\":0.2}",
+      "{\"filterSma\":200,\"entry\":55,\"exit\":20,\"momDays\":56,\"atrK\":3,\"volTarget\":0.2}",
+      "{\"filterSma\":100,\"entry\":20,\"exit\":30,\"momDays\":56,\"atrK\":2,\"volTarget\":0.2}",
+      "{\"filterSma\":200,\"entry\":80,\"exit\":30,\"momDays\":56,\"atrK\":3,\"volTarget\":0.35}",
+      "{\"filterSma\":150,\"entry\":55,\"exit\":20,\"momDays\":28,\"atrK\":3,\"volTarget\":0.2}",
+      "{\"filterSma\":200,\"entry\":55,\"exit\":20,\"momDays\":28,\"atrK\":3,\"volTarget\":0.2}"
+    ]
+  }
+}

@@ -1,0 +1,54 @@
+// Universe and global defaults. Edit here (or override via the CONFIG_JSON var).
+
+export const KRX_ETFS = {
+  '069500': 'KODEX 200',
+  '102110': 'TIGER 200',
+  '278530': 'KODEX 200TR',
+  '379800': 'KODEX 미국S&P500TR',
+  '153130': 'KODEX 단기채권',
+};
+
+export const KRX_STOCKS = {
+  '005930': '삼성전자',
+  '000660': 'SK하이닉스',
+  '373220': 'LG에너지솔루션',
+  '207940': '삼성바이오로직스',
+  '005380': '현대차',
+  '000270': '기아',
+  '068270': '셀트리온',
+  '105560': 'KB금융',
+  '055550': '신한지주',
+  '035420': 'NAVER',
+  '005490': 'POSCO홀딩스',
+  '012330': '현대모비스',
+  '028260': '삼성물산',
+  '006400': '삼성SDI',
+  '051910': 'LG화학',
+  '086790': '하나금융지주',
+  '012450': '한화에어로스페이스',
+  '034020': '두산에너빌리티',
+  '032830': '삼성생명',
+  '015760': '한국전력',
+};
+
+export const KRX_ALL = { ...KRX_ETFS, ...KRX_STOCKS };
+export const krxMeta = Object.fromEntries(Object.keys(KRX_ALL).map((s) => [s, { etf: s in KRX_ETFS, name: KRX_ALL[s] }]));
+
+// Core long-lived Upbit KRW markets. The live collector adds the current top-volume
+// markets (up to CRYPTO_MAX) on top of BTC/ETH; stablecoins and 유의종목 are excluded.
+export const CRYPTO_CORE = ['KRW-BTC', 'KRW-ETH', 'KRW-XRP', 'KRW-SOL', 'KRW-DOGE', 'KRW-ADA', 'KRW-TRX', 'KRW-LINK', 'KRW-BCH', 'KRW-XLM'];
+export const CRYPTO_NAMES = {
+  'KRW-BTC': '비트코인', 'KRW-ETH': '이더리움', 'KRW-XRP': '리플', 'KRW-SOL': '솔라나', 'KRW-DOGE': '도지코인',
+  'KRW-ADA': '에이다', 'KRW-TRX': '트론', 'KRW-LINK': '체인링크', 'KRW-BCH': '비트코인캐시', 'KRW-XLM': '스텔라루멘',
+};
+export const CRYPTO_MAX = 12;
+export const CRYPTO_HOURLY = ['KRW-BTC', 'KRW-ETH'];
+export const STABLECOINS = new Set(['KRW-USDT', 'KRW-USDC', 'KRW-USDS', 'KRW-DAI', 'KRW-USD1']);
+
+export const INITIAL_CASH = 10_000_000;
+
+export const RETENTION = { hourlyDays: 120 };
+
+export function symName(sym) {
+  return KRX_ALL[sym] || CRYPTO_NAMES[sym] || sym.replace(/^KRW-/, '');
+}

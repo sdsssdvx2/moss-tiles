@@ -1,0 +1,35 @@
+# Weekly offline simulation run. Free on a public repo; no secrets.
+# Writes backtest/results/import.json, which the paper bot pulls by itself.
+name: weekly
+on:
+  schedule:
+    - cron: '17 20 * * 6'   # Sat 20:17 UTC = Sun 05:17 KST
+  workflow_dispatch: {}
+permissions:
+  contents: write
+concurrency: { group: weekly, cancel-in-progress: false }
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - name: Restore market data cache
+        uses: actions/cache@v4
+        with:
+          path: backtest/.cache
+          key: data-${{ github.run_id }}
+          restore-keys: data-
+      - name: Unit tests (results are trusted only when the engine is green)
+        run: npm install --no-audit --no-fund && node --test test/*.test.mjs
+      - name: Research
+        run: node backtest/run.mjs --research --export backtest/results/import.json
+      - name: Commit results
+        run: |
+          git config user.name "moss-bot"
+          git config user.email "moss-bot@users.noreply.github.com"
+          git add backtest/trials.json backtest/holdout.json backtest/variants.json backtest/results/import.json backtest/results/latest-report-ko.md 2>/dev/null || true
+          git commit -m "weekly $(date -u +%F)" || echo "nothing to commit"
+          git push || echo "push skipped"

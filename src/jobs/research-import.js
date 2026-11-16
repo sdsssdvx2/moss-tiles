@@ -1,0 +1,37 @@
+// Import of weekly research results (pushed to /api/import, or pulled from RESEARCH_URL by the tick).
+import { byId as staticById, variantStrategies, MAX_ACTIVE_VARIANTS } from '../strategies/index.js';
+import { backtestStmt, kvAll, kvSetStmt } from '../db/store.js';
+
+/**
+ * Results of the offline/GitHub-Actions research job: backtest evidence for strategies and
+ * NEW variants that passed G1 (they then start the paper pipeline from scratch).
+ * Variants can only reference existing code (base strategy) with new parameters.
+ */
+export async function importResearch(env, body) {
+  const kv = await kvAll(env.DB);
+  const stmts = [];
+  const known = new Set([...Object.keys(staticById), ...variantStrategies(kv.variants).map((v) => v.id)]);
+  const variants = Array.isArray(kv.variants) ? kv.variants : [];
+  let addedVariants = 0;
+  for (const v of (body?.variants || []).slice(0, 4)) {
+    const b = staticById[v.base];
+    if (!b || b.benchmarkOnly || typeof v.params !== 'object' || known.has(v.id) || v.id !== `${b.family}_v${v.version}`) continue;
+    variants.push({ id: v.id, base: v.base, version: v.version | 0, params: v.params, trials: v.trials | 0, registeredAt: Math.floor(Date.now() / 1000), note: String(v.note || '').slice(0, 200) });
+    known.add(v.id); addedVariants++;
+    stmts.push(env.DB.prepare('INSERT INTO events (t, kind, strategy_id, message, notified) VALUES (?,?,?,?,0)').bind(Math.floor(Date.now() / 1000), 'stage', v.id, `🧪 자동 연구가 새 변형 ${v.id} 을(를) 찾아 모의 검증 파이프라인에 등록 (시도 ${v.trials}번 보정 후 통과)`));
+  }
+  if (addedVariants) stmts.push(kvSetStmt(env.DB, 'variants', variants.slice(-MAX_ACTIVE_VARIANTS)));
+  if (body?.trials && typeof body.trials === 'object') {
+    const t = { ...(kv['research:trials'] || {}) };
+    for (const [f, n] of Object.entries(body.trials)) t[f] = Math.max(t[f] || 0, n | 0); // trial counts only ever grow
+    stmts.push(kvSetStmt(env.DB, 'research:trials', t));
+  }
+  let bt = 0;
+  for (const r of (body?.backtests || []).slice(0, 60)) {
+    if (!known.has(r.strategy_id) || !['wf', 'grid'].includes(r.kind)) continue;
+    stmts.push(backtestStmt(env.DB, r.strategy_id, r.kind, String(r.source || 'research'), r.summary, r.curve || null)); bt++;
+  }
+  if (stmts.length) await env.DB.batch(stmts);
+  return { ok: true, backtests: bt, variants: addedVariants };
+}
+
