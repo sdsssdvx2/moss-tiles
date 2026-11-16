@@ -10,7 +10,8 @@ import { DAY, HOUR } from '../core/calendar.js';
 import { symName } from '../config.js';
 
 export const AI_SYMBOLS = ['278530', '379800', 'KRW-BTC', 'KRW-ETH'];
-export const DEFAULT_WORKERS_AI_MODELS = ['@cf/deepseek-ai/deepseek-v4.1-flash-1017', '@cf/zai-org/glm-4.7-flash', '@cf/google/gemma-4-26b-a4b-it'];
+// Free-plan models verified 2026-11-16 (deepseek-v4.x needs Workers Paid → 5035). gpt-oss with low reasoning ≈ 22 neurons/call.
+export const DEFAULT_WORKERS_AI_MODELS = ['@cf/openai/gpt-oss-120b', '@cf/meta/llama-4-scout-17b-16e-instruct', '@cf/zai-org/glm-4.7-flash'];
 const useEndpoint = (env) => !!(env.AI_ENDPOINT && env.AI_API_KEY && env.AI_MODEL);
 const useBinding = (env) => !!(env.AI && typeof env.AI.run === 'function') && String(env.AI_PROVIDER || 'workers-ai') !== 'off';
 export const aiConfigured = (env) => useEndpoint(env) || useBinding(env);
@@ -44,7 +45,8 @@ async function callModel(env, prompt, fetcher) {
   const notes = [];
   for (const model of aiModels(env)) {
     try {
-      const out = await env.AI.run(model, { messages, temperature: 0, max_tokens: 900 });
+      // reasoning models spend tokens thinking before the answer: generous cap, and low effort where supported
+      const out = await env.AI.run(model, { messages, temperature: 0, max_tokens: 3000, ...(model.includes('gpt-oss') ? { reasoning_effort: 'low' } : {}) });
       const text = textOf(out);
       const pr = text ? parseAiResponse(text) : null;
       if (pr && (Object.keys(pr.scores).length || Object.keys(pr.veto).length)) return { model, text, note: notes.join('; ') };

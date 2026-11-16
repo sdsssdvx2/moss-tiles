@@ -31,8 +31,8 @@
     "CRYPTO_BACKFILL_DAYS": "1100",
     "NEWS_VETO_PROVIDER": "ai",
     "AI_PROVIDER": "workers-ai",
-    "AI_MODEL": "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
-    "AI_FALLBACK_MODELS": "@cf/zai-org/glm-4.7-flash,@cf/google/gemma-4-26b-a4b-it",
+    "AI_MODEL": "@cf/openai/gpt-oss-120b",
+    "AI_FALLBACK_MODELS": "@cf/meta/llama-4-scout-17b-16e-instruct,@cf/zai-org/glm-4.7-flash",
     "LOG_TICKS": "false",
     // 코인 시장 신호 (위험 신호 전용). 기준값 바꾸기: MARKET_SIGNALS_JSON 예) {"premHold":0.06,"derivRules":false}
     "MARKET_SIGNALS_ENABLED": "true",
