@@ -123,6 +123,8 @@ function timeline(s, series) {
 
 /** Holdout start is FIXED once (frozen in holdout.json) so later runs cannot move it. */
 function holdoutFrom(key, tl, warm) {
+  // synthetic fixture data has its own dates: never mix it with the real frozen cut-offs
+  if (flag('--fixtures')) return tl[warm + Math.floor((tl.length - warm) * 0.75)];
   const f = join(HERE, 'holdout.json');
   const j = existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : {};
   if (!j[key] && tl.length > warm + 50) {
@@ -147,7 +149,11 @@ export function evaluateStrategy(s, data, { params: forced, extraTrials = 0 } = 
   const meta = s.market === 'krx' ? krxMeta : {};
   const hoKey = `${s.market}:${s.timeframe}:${s.benchSym}`;
   const hoFrom = holdoutFrom(hoKey, tl, warm);
-  const devTo = tl[tl.indexOf(hoFrom) - 1] ?? tl[Math.floor(tl.length * 0.75)];
+  // development data = strictly before the frozen hold-out start (never fall back to a %-split:
+  // if the cutoff bar is missing that would leak hold-out bars into training)
+  const devTl = tl.filter((t) => t < hoFrom);
+  if (devTl.length < warm + 120) return null;
+  const devTo = devTl[devTl.length - 1];
   const ppy = s.market === 'krx' ? 252 : s.timeframe === '1h' ? 24 * 365 : 365;
   // 1) development period: walk-forward OOS (params chosen in-sample each fold)
   const devSeries = Object.fromEntries(Object.entries(series).map(([k, v]) => [k, v.filter((b) => b.t <= devTo)]));
@@ -188,6 +194,8 @@ function seeded(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 10
 // trial ledger (persisted locally; pushed to the Worker too)
 const TRIALS = join(HERE, 'trials.json');
 const readTrials = () => (existsSync(TRIALS) ? JSON.parse(readFileSync(TRIALS, 'utf8')) : {});
+/** Distinct research trials already spent on a family (B03: the base strategy's DSR must include them). */
+export function ledgerTrials(family) { const v = readTrials()[family]; return typeof v === 'number' ? v : (v?.count || 0); }
 // variants this repo already exported (pull mode has no /api/research-state to ask)
 const VARIANTS = join(HERE, 'variants.json');
 const readVariants = () => (existsSync(VARIANTS) ? JSON.parse(readFileSync(VARIANTS, 'utf8')) : []);
@@ -206,6 +214,17 @@ async function research(data, results, remote) {
     const led = trialsDb[family] || { count: 0, seen: [] };
     const seen = new Set(led.seen);
     const tried = [];
+    const devScore = (params) => {
+      const s = { ...base, params: { ...base.params, ...params }, grid: null };
+      const series = seriesFor(s, data);
+      const tl = timeline(s, series);
+      const warm = Math.min(s.lookback || 100, Math.floor(tl.length / 4));
+      if (tl.length < warm + 200) return null;
+      const hoFrom = holdoutFrom(`${s.market}:${s.timeframe}:${s.benchSym}`, tl, warm);
+      if (tl.filter((t) => t < hoFrom).length < warm + 120) return null;
+      return runBacktest({ strategy: s, series, meta: s.market === 'krx' ? krxMeta : {}, fromT: tl[warm], toT: hoFrom - 1 }).metrics.sharpe;
+    };
+    const baseDev = devScore({});
     const proposals = [...Array.from({ length: VARIANTS_PER_FAMILY_PER_RUN }, () => pickRandom(cfg.space, rnd)), ...(await llmIdeas(family, cfg, base.params))];
     for (const p of proposals) {
       const s = { ...base, params: { ...base.params, ...p }, grid: null };
@@ -228,8 +247,9 @@ async function research(data, results, remote) {
     const s = { ...base, params: { ...base.params, ...best.p }, grid: null };
     const ev = evaluateStrategy(s, data, { params: best.p, extraTrials: total });
     const g1 = evaluateStage({ strategy: { ...s, researchOnly: false }, bt: ev, paper: null, kill: null, gates: GATE_DEFAULTS });
-    const baseEv = results[base.id];
-    const better = !baseEv || (ev.holdout.sharpe > (baseEv.holdout?.sharpe ?? -Infinity));
+    // B02: "better than the base" is decided on the DEVELOPMENT period only, so repeated weekly runs do not
+    // select on the hold-out. (The hold-out is still used once per candidate for the G1 pass/fail gate.)
+    const better = baseDev == null || best.sharpe > baseDev;
     let version = base.version + 1;
     while (existing.has(`${family}_v${version}`)) version++;
     const id = `${family}_v${version}`;
@@ -304,7 +324,7 @@ async function main() {
     if (s.external || (only && !only.includes(s.id))) continue;
     const t0 = Date.now();
     try {
-      const r = evaluateStrategy(s, data);
+      const r = evaluateStrategy(s, data, { extraTrials: ledgerTrials(s.family) });
       if (!r) { log(`  - ${s.id}: 데이터 부족`); continue; }
       results[s.id] = r;
       log(`  · ${s.id.padEnd(22)} ${r.range}  보존구간 ${pc(r.holdout.totalReturn)} (기준 ${pc(r.holdout.bench.totalReturn)})  MDD ${(r.holdout.mdd * 100).toFixed(1)}%  샤프 ${r.holdout.sharpe.toFixed(2)}  거래 ${r.totalTrades}  DSR ${r.dsr}  [${((Date.now() - t0) / 1000).toFixed(1)}s]`);
