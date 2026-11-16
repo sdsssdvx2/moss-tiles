@@ -54,8 +54,8 @@ export function runUpsertStmt(db, run) {
     .bind(run.id, run.strategy_id, run.mode, run.engine || 'builtin', JSON.stringify(run.state), run.start_after ?? null, run.last_t ?? null, nowSec());
 }
 export function fillStmts(db, runId, fills) {
-  const st = db.prepare('INSERT OR REPLACE INTO fills (run_id, t, seq, sym, side, qty, price, gross, fee, tax, pnl, reason, cash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
-  return fills.map((f, i) => st.bind(runId, f.t, f.seq ?? i, f.sym, f.side, f.qty, f.price, f.gross, f.fee, f.tax, f.pnl, String(f.reason || '').slice(0, 300), f.cash));
+  const st = db.prepare('INSERT OR REPLACE INTO fills (run_id, t, seq, sym, side, qty, price, gross, fee, tax, pnl, reason, cash, phase) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+  return fills.map((f, i) => st.bind(runId, f.t, f.seq ?? i, f.sym, f.side, f.qty, f.price, f.gross, f.fee, f.tax, f.pnl, String(f.reason || '').slice(0, 300), f.cash, f.phase ?? null));
 }
 export function equityStmts(db, runId, points) {
   const st = db.prepare('INSERT OR REPLACE INTO equity (run_id, t, equity, cash, invested, bench) VALUES (?,?,?,?,?,?)');

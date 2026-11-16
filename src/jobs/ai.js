@@ -39,6 +39,7 @@ async function callModel(env, prompt, fetcher) {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${env.AI_API_KEY}` },
       body: JSON.stringify({ model: env.AI_MODEL, temperature: 0, messages, response_format: { type: 'json_object' } }),
     });
+    if (!res.ok) throw new Error(`HTTP_${res.status}`);
     const j = await res.json().catch(() => null);
     return { model: String(env.AI_MODEL), text: textOf(j), note: res.ok ? '' : `HTTP_${res.status}` };
   }
@@ -51,7 +52,7 @@ async function callModel(env, prompt, fetcher) {
       const pr = text ? parseAiResponse(text) : null;
       if (pr && (Object.keys(pr.scores).length || Object.keys(pr.veto).length)) return { model, text, note: notes.join('; ') };
       notes.push(`${model.split('/').pop()}:${text ? 'PARSE' : 'EMPTY'}`);
-      if (text) return { model, text, note: notes.join('; ') };
+      // Empty, malformed or schema-invalid text must also try the next model.
     } catch (e) { notes.push(`${model.split('/').pop()}:${String(e?.message || e).slice(0, 60)}`); }
   }
   return { model: aiModels(env)[0], text: null, note: notes.join('; ').slice(0, 200) };
@@ -81,13 +82,13 @@ export function parseAiResponse(text, syms = AI_SYMBOLS) {
   const scores = {};
   for (const s of Array.isArray(j?.scores) ? j.scores : []) {
     if (!syms.includes(s?.sym)) continue;
-    const v = Number(s.score);
-    if (!Number.isFinite(v)) continue;
+    const v = s.score;
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
     scores[s.sym] = { score: Math.max(-1, Math.min(1, v)), reason: String(s.reason || '').slice(0, 80) };
   }
   const veto = {};
-  for (const m of ['krx', 'crypto']) if (j?.veto?.[m] in VETO) veto[m] = VETO[j.veto[m]];
-  return { scores, veto };
+  for (const m of ['krx', 'crypto']) if (Object.hasOwn(VETO, j?.veto?.[m])) veto[m] = VETO[j.veto[m]];
+  return Object.keys(scores).length || Object.keys(veto).length ? { scores, veto } : null;
 }
 
 export async function aiTask(env, kv, now, { fetcher = fetch } = {}) {
@@ -100,12 +101,18 @@ export async function aiTask(env, kv, now, { fetcher = fetch } = {}) {
   try { ({ text, note, model } = await callModel(env, prompt, fetcher)); } catch (e) { note = String(e?.message || e).slice(0, 100); }
   const parsed = text ? parseAiResponse(text) : null;
   const stmts = [kvSetStmt(env.DB, 'ai:at', now)];
-  if (parsed) {
-    ok = 1;
-    const st = env.DB.prepare('INSERT OR REPLACE INTO signals (sym, t, kind, value, note) VALUES (?,?,?,?,?)');
-    for (const [sym, s] of Object.entries(parsed.scores)) stmts.push(st.bind(sym, now, 'ai_score', s.score, s.reason));
-    for (const [m, v] of Object.entries(parsed.veto)) stmts.push(st.bind(`*${m}`, now, 'news_veto', v, 'AI 뉴스 판단'));
-  } else note = note || 'PARSE_FAILED (fail-closed: scale 0.5x / veto)';
+  if (parsed) ok = 1;
+  else note = note || 'PARSE_FAILED (fail-closed: scale 0.5x / veto)';
+  // Persist a complete conservative snapshot, including missing fields on partial success.
+  // Historical paper replay then observes the failure only at/after this timestamp.
+  const st = env.DB.prepare('INSERT OR REPLACE INTO signals (sym, t, kind, value, note) VALUES (?,?,?,?,?)');
+  for (const sym of AI_SYMBOLS) {
+    const s = parsed?.scores[sym] || { score: -1, reason: 'AI 결과 없음: 신규 매수 0.5배' };
+    stmts.push(st.bind(sym, now, 'ai_score', s.score, s.reason));
+  }
+  for (const m of ['krx', 'crypto']) {
+    stmts.push(st.bind(`*${m}`, now, 'news_veto', parsed?.veto[m] ?? 1, 'AI 뉴스 판단 (누락/실패는 신규 매수 보류)'));
+  }
   stmts.push(env.DB.prepare('INSERT INTO ai_audit (t, model, prompt, response, ok, note) VALUES (?,?,?,?,?,?)').bind(now, String(model), prompt.slice(0, 20000), text ? String(text).slice(0, 20000) : null, ok, note));
   await env.DB.batch(stmts);
   return true;

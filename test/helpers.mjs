@@ -1,6 +1,6 @@
 // Synthetic deterministic data + an in-memory D1 shim (node:sqlite) for job tests.
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { DAY, isKrxBusinessDay, dayT } from '../src/core/calendar.js';
 
 export function rng(seed = 1) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32); }
@@ -34,7 +34,10 @@ class Stmt {
 }
 export function makeD1() {
   const db = new DatabaseSync(':memory:');
-  db.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8'));
+  const migrations = new URL('../migrations/', import.meta.url);
+  for (const file of readdirSync(migrations).filter((x) => x.endsWith('.sql')).sort()) {
+    db.exec(readFileSync(new URL(file, migrations), 'utf8'));
+  }
   return {
     raw: db,
     prepare: (sql) => new Stmt(db, sql),

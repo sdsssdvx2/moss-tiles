@@ -71,7 +71,7 @@ export function rsi(values, n = 14) {
 
 /** Wilder ATR from bar objects {h,l,c} */
 export function atr(bars, n = 14) {
-  if (bars.length < n + 1) return NaN;
+  if (!Number.isSafeInteger(n) || n < 1 || n > 10000 || bars.length < n + 1) return NaN;
   const tr = [];
   for (let i = 1; i < bars.length; i++) {
     const b = bars[i], pc = bars[i - 1].c;

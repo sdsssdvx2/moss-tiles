@@ -48,5 +48,10 @@ test('aiTask fails closed when every model fails', async () => {
   assert.equal(await aiTask(env, {}, 1_800_000_000), true);
   const audit = DB.raw.prepare('SELECT ok, response FROM ai_audit').all();
   assert.equal(audit[0].ok, 0); assert.equal(audit[0].response, null);
-  assert.equal(DB.raw.prepare('SELECT COUNT(*) n FROM signals').get().n, 0);
+  // Conservative snapshot: every AI score -1 (→ 0.5x buys) and both news vetoes on, so stale
+  // successes are not reused after a failure.
+  const sig = DB.raw.prepare('SELECT kind, value FROM signals').all();
+  assert.ok(sig.length > 0);
+  assert.ok(sig.filter((r) => r.kind === 'ai_score').every((r) => r.value === -1));
+  assert.deepEqual(sig.filter((r) => r.kind === 'news_veto').map((r) => r.value), [1, 1]);
 });

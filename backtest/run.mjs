@@ -246,10 +246,11 @@ async function research(data, results, remote) {
     if (!best) continue;
     const s = { ...base, params: { ...base.params, ...best.p }, grid: null };
     const ev = evaluateStrategy(s, data, { params: best.p, extraTrials: total });
+    if (!ev || baseDev == null) continue; // no dev evidence: skip, including before ev.holdout logging
     const g1 = evaluateStage({ strategy: { ...s, researchOnly: false }, bt: ev, paper: null, kill: null, gates: GATE_DEFAULTS });
     // B02: "better than the base" is decided on the DEVELOPMENT period only, so repeated weekly runs do not
     // select on the hold-out. (The hold-out is still used once per candidate for the G1 pass/fail gate.)
-    const better = baseDev == null || best.sharpe > baseDev;
+    const better = best.sharpe > baseDev;
     let version = base.version + 1;
     while (existing.has(`${family}_v${version}`)) version++;
     const id = `${family}_v${version}`;

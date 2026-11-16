@@ -24,7 +24,11 @@ function sharpeOf(r, ppy) {
 export function allocate(candidates, prev, nowSec, cfg = ALLOC_DEFAULTS) {
   const c = { ...ALLOC_DEFAULTS, ...cfg };
   // B19: a strategy that lost eligibility (halted, failed...) drops to 0 immediately, bypassing interval/step limits
-  const disq = new Set(candidates.filter((x) => !x.benchmarkOnly && !c.eligibleStages.includes(x.stage)).map((x) => x.id));
+  const eligibleIds = new Set(candidates.filter((x) => x.benchmarkOnly || c.eligibleStages.includes(x.stage)).map((x) => x.id));
+  const disq = new Set([
+    ...candidates.filter((x) => !x.benchmarkOnly && !c.eligibleStages.includes(x.stage)).map((x) => x.id),
+    ...Object.keys(prev?.weights || {}).filter((id) => !eligibleIds.has(id)),
+  ]);
   const hasDisq = Object.keys(prev?.weights || {}).some((id) => disq.has(id));
   if (prev && nowSec - prev.t < c.minIntervalDays * 86400 && !hasDisq) return { ...prev, changed: false };
   const baselines = candidates.filter((x) => x.benchmarkOnly).map((x) => x.id);
@@ -52,10 +56,15 @@ export function allocate(candidates, prev, nowSec, cfg = ALLOC_DEFAULTS) {
   for (const id of ids) {
     if (disq.has(id)) continue;
     const p = prevW[id] || 0, tgt = target[id] || 0;
-    const w = p + Math.max(-c.maxStep, Math.min(c.maxStep, tgt - p));
+    const w = Math.min(c.maxPerStrategy, Math.max(0, p + Math.max(-c.maxStep, Math.min(c.maxStep, tgt - p))));
     if (w > 1e-4) out[id] = Math.round(w * 10000) / 10000;
   }
-  const used = Object.values(out).reduce((a, b) => a + b, 0);
+  let used = Object.values(out).reduce((a, b) => a + b, 0);
+  // Hard portfolio constraints override the soft step limit.
+  if (used > room) {
+    for (const id of Object.keys(out)) out[id] = Math.floor(out[id] * room / used * 10000) / 10000;
+    used = Object.values(out).reduce((a, b) => a + b, 0);
+  }
   const rest = Math.max(0, 1 - used);
   for (const b of baselines) out[b] = Math.round((rest / Math.max(1, baselines.length)) * 10000) / 10000;
   for (const b of baselines) notes[b] = '기준선 몫(최소 ' + Math.round(c.baselineFloor * 100) + '% + 남는 몫)';
