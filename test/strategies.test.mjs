@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -94,7 +95,7 @@ test('futures simulation: liquidation price, stop, liquidation on crash, funding
 test('static safety: no live order capability anywhere in src/', () => {
   const files = [];
   const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith('.js')) files.push(p); } };
-  walk(new URL('../src', import.meta.url).pathname);
+  walk(fileURLToPath(new URL('../src', import.meta.url)));
   const forbidden = [/\/v1\/orders?\b/i, /api\.upbit\.com\/v1\/(orders|withdraws|deposits|accounts)/i, /openapi\.koreainvestment\.com/i, /order-cash|order-credit|inquire-balance/i, /access_key|secret_key|appsecret|APP_KEY/i, /fapi\.binance|dapi\.binance/i,
     /okx\.com\/api\/v5\/(trade|account|asset)/i, /bithumb\.com\/(trade|info)\//i, /coinbase\.com\/(orders|accounts)/i, /binance\.(com|vision)\/(api|sapi)\/v\d\/(order|account)/i];
   for (const f of files) {

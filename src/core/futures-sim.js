@@ -29,7 +29,7 @@ function closePos(state, t, price, reason, kind, fills, fee) {
   state.fees += f; state.fills++; state.sells++;
   const realized = Math.max(0, ret) - p.margin;
   if (realized > 0) state.wins++;
-  fills.push({ t, sym: p.sym, side: p.side > 0 ? 'SELL' : 'BUY', qty: p.qty, price: Math.round(price), gross: Math.round(price * p.qty), fee: f, tax: 0, pnl: Math.round(realized), reason, cash: Math.round(state.cash) });
+  fills.push({ t, sym: p.sym, side: p.side > 0 ? 'SELL' : 'BUY', qty: p.qty, price: Math.round(price), gross: Math.round(price * p.qty), fee: f, tax: 0, pnl: Math.round(realized), reason, cash: Math.round(state.cash), phase: 'exit' });
   state.pos = null;
 }
 
@@ -37,6 +37,9 @@ function closePos(state, t, price, reason, kind, fills, fee) {
 export function stepFutures(state, t, feed, opts) {
   const fills = [], events = [];
   const cfg = { ...FUT_DEFAULTS, ...(opts.params || {}) };
+  // B07: cost stress (e.g. 2x costs check) must reach the futures model too
+  const k = opts.costs?.stress || 1;
+  if (k !== 1) { cfg.fee *= k; cfg.slippage *= k; }
   const lev = Math.min(cfg.leverage, cfg.maxLeverage);
   const sym = opts.universe[0];
   feed.advance(t);
@@ -56,7 +59,7 @@ export function stepFutures(state, t, feed, opts) {
         state.cash -= margin + f; state.fees += f; state.fills++;
         const stop = o.stopDist ? px - o.side * o.stopDist : null;
         state.pos = { sym, side: o.side, qty, entry: px, margin, lev, stop, liq: liqPrice(px, o.side, lev, cfg.mmr), t };
-        fills.push({ t, sym, side: o.side > 0 ? 'BUY' : 'SELL', qty, price: Math.round(px), gross: Math.round(px * qty), fee: f, tax: 0, pnl: 0, reason: o.reason, cash: Math.round(state.cash) });
+        fills.push({ t, sym, side: o.side > 0 ? 'BUY' : 'SELL', qty, price: Math.round(px), gross: Math.round(px * qty), fee: f, tax: 0, pnl: 0, reason: o.reason, cash: Math.round(state.cash), phase: 'entry' });
       }
     }
     // 2) funding, stop and liquidation inside the bar

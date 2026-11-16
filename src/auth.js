@@ -66,11 +66,14 @@ export async function loginAllowed(request, env, now = Math.floor(Date.now() / 1
 export async function recordLogin(request, env, ok, now = Math.floor(Date.now() / 1000)) {
   const b = await bucketFor(request, env);
   if (ok) { await env.DB.prepare('DELETE FROM login_rate_limits WHERE bucket = ?').bind(b).run(); return; }
-  const row = await env.DB.prepare('SELECT failures, window_started_at FROM login_rate_limits WHERE bucket = ?').bind(b).first();
-  let failures = 1, start = now;
-  if (row && now - row.window_started_at < WINDOW) { failures = row.failures + 1; start = row.window_started_at; }
-  await env.DB.prepare('INSERT INTO login_rate_limits (bucket, failures, window_started_at, blocked_until) VALUES (?,?,?,?) ON CONFLICT(bucket) DO UPDATE SET failures=excluded.failures, window_started_at=excluded.window_started_at, blocked_until=excluded.blocked_until')
-    .bind(b, failures, start, failures >= MAX_FAIL ? now + BLOCK : null).run();
+  // B15: one atomic statement, so concurrent failures accumulate instead of overwriting each other
+  const inWin = '?2 - login_rate_limits.window_started_at < ?3';
+  await env.DB.prepare(`INSERT INTO login_rate_limits (bucket, failures, window_started_at, blocked_until) VALUES (?1, 1, ?2, NULL)
+    ON CONFLICT(bucket) DO UPDATE SET
+      blocked_until = CASE WHEN (CASE WHEN ${inWin} THEN login_rate_limits.failures + 1 ELSE 1 END) >= ?4 THEN ?5 ELSE login_rate_limits.blocked_until END,
+      failures = CASE WHEN ${inWin} THEN login_rate_limits.failures + 1 ELSE 1 END,
+      window_started_at = CASE WHEN ${inWin} THEN login_rate_limits.window_started_at ELSE ?2 END`)
+    .bind(b, now, WINDOW, MAX_FAIL, now + BLOCK).run();
 }
 export async function checkPassword(env, input) {
   if (!env.OWNER_PASSWORD) return false;

@@ -46,7 +46,8 @@ export function computeMetrics(points, fills, { market = 'krx', tf = '1d' } = {}
   const bx = points.map((p) => p.bench);
   const first = points[0], last = points[points.length - 1];
   const days = Math.max(0, (last.t - first.t) / DAY) + (tf === '1h' ? 0 : 1);
-  const sells = fills.filter((f) => f.side === 'SELL');
+  // B08: futures fills carry phase (a short is closed by a BUY); spot exits are SELLs
+  const sells = fills.filter((f) => (f.phase ? f.phase === 'exit' : f.side === 'SELL'));
   const wins = sells.filter((f) => f.pnl > 0).length;
   const tr = eq[eq.length - 1] / eq[0] - 1;
   const btr = bx[0] > 0 ? bx[bx.length - 1] / bx[0] - 1 : 0;

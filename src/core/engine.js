@@ -73,6 +73,8 @@ function fillOrders(state, t, feed, opts, fills, events) {
       if (qty <= 0) continue;
       const price = fillPrice('SELL', bar.o, costs, m);
       const gross = qty * price;
+      // B11: below the exchange minimum the sell cannot execute; keep the dust position
+      if (gross < costs.minOrderKrw) { events?.push({ t, kind: 'order_cancel', sym: o.sym, message: `최소 주문금액 미만 잔량이라 매도 불가 (${Math.round(gross)}원)` }); continue; }
       const { fee, tax } = feesFor('SELL', gross, costs, m);
       const basis = pos.cost * (qty / pos.qty);
       const net = gross - fee - tax;
@@ -83,7 +85,7 @@ function fillOrders(state, t, feed, opts, fills, events) {
       if (pos.qty <= 0) delete state.pos[o.sym];
       state.fills++; state.sells++; if (pnl > 0) state.wins++;
       state.fees += fee; state.taxes += tax;
-      fills.push({ t, sym: o.sym, side: 'SELL', qty, price: r2(price), gross: r2(gross), fee, tax, pnl: r2(pnl), reason: o.reason, cash: r2(state.cash) });
+      fills.push({ t, sym: o.sym, side: 'SELL', qty, price, gross: r2(gross), fee, tax, pnl: r2(pnl), reason: o.reason, cash: r2(state.cash) });
     } else {
       const price = fillPrice('BUY', bar.o, costs, m);
       const qty = Math.min(o.qty, affordableQty(state.cash, price, costs));
@@ -96,14 +98,15 @@ function fillOrders(state, t, feed, opts, fills, events) {
       p.qty = roundQty(p.qty + qty, costs) || p.qty + qty;
       p.cost += gross + fee;
       state.fills++; state.fees += fee;
-      fills.push({ t, sym: o.sym, side: 'BUY', qty, price: r2(price), gross: r2(gross), fee, tax: 0, pnl: 0, reason: o.reason, cash: r2(state.cash) });
+      fills.push({ t, sym: o.sym, side: 'BUY', qty, price, gross: r2(gross), fee, tax: 0, pnl: 0, reason: o.reason, cash: r2(state.cash) });
     }
   }
   state.pending = keep;
 }
 
 function mark(state, t, feed, opts) {
-  for (const sym of opts.universe) { const b = feed.last(sym); if (b) state.lastPx[sym] = b.c; }
+  // B12: value held positions too (a symbol can leave the universe while still held)
+  for (const sym of new Set([...opts.universe, ...Object.keys(state.pos)])) { const b = feed.last(sym); if (b) state.lastPx[sym] = b.c; }
   if (opts.benchSym) { const b = feed.last(opts.benchSym); if (b) state.lastPx[opts.benchSym] = b.c; }
   let inv = 0;
   for (const [sym, p] of Object.entries(state.pos)) inv += p.qty * (state.lastPx[sym] || 0);

@@ -23,7 +23,11 @@ export async function sendTelegram(env, text, fetcher = fetch) {
 
 const ids = (list) => list.map(() => '?').join(',');
 async function markEvents(env, list, value) {
-  if (list.length) await env.DB.prepare(`UPDATE events SET notified = ${value} WHERE id IN (${ids(list)})`).bind(...list).run();
+  // B17: D1 allows at most 100 bound parameters per statement
+  for (let i = 0; i < list.length; i += 100) {
+    const chunk = list.slice(i, i + 100);
+    await env.DB.prepare(`UPDATE events SET notified = ${value} WHERE id IN (${ids(chunk)})`).bind(...chunk).run();
+  }
 }
 
 /**

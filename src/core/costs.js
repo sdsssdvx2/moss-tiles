@@ -74,7 +74,11 @@ export function feesFor(side, gross, cost, meta = {}) {
 /** Max quantity purchasable with `cash` at `price` including commission. */
 export function affordableQty(cash, price, cost) {
   if (price <= 0 || cash <= 0) return 0;
-  return roundQty(cash / (price * (1 + cost.commission)), cost);
+  const q = roundQty(cash / (price * (1 + cost.commission)), cost);
+  // B09: the real fee is rounded to whole won; re-cap so gross + rounded fee always fits in cash
+  const fee = feesFor('BUY', q * price, cost).fee;
+  if (q * price + fee <= cash + 1e-9) return q;
+  return Math.max(0, roundQty((cash - fee) / price, cost));
 }
 
 export function mergeCosts(market, overrides = {}) {
@@ -83,5 +87,5 @@ export function mergeCosts(market, overrides = {}) {
 
 /** Cost stress (research G1: costs x2). */
 export function stressCosts(cost, k = 2) {
-  return { ...cost, commission: cost.commission * k, slippage: cost.slippage * k, sellTaxStock: cost.sellTaxStock, sellTaxEtf: cost.sellTaxEtf };
+  return { ...cost, commission: cost.commission * k, slippage: cost.slippage * k, sellTaxStock: cost.sellTaxStock, sellTaxEtf: cost.sellTaxEtf, stress: (cost.stress || 1) * k };
 }

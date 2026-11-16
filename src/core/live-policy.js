@@ -41,7 +41,7 @@ export function liveKillSwitch(points, fills = [], o = {}, rules = GATE_DEFAULTS
   for (const p of points || []) { peak = Math.max(peak, p.equity); if (peak > 0) mdd = Math.max(mdd, 1 - p.equity / peak); }
   if (mdd >= ddLimit) return { kill: true, reason: `고점 대비 ${Math.round(mdd * 1000) / 10}% 하락 (한도 ${Math.round(ddLimit * 1000) / 10}%)`, mdd };
   let streak = 0, maxStreak = 0;
-  for (const f of fills) if (f.side === 'SELL') { streak = f.pnl < 0 ? streak + 1 : 0; maxStreak = Math.max(maxStreak, streak); }
+  for (const f of fills) if (f.phase ? f.phase === 'exit' : f.side === 'SELL') { streak = f.pnl < 0 ? streak + 1 : 0; maxStreak = Math.max(maxStreak, streak); }
   if (maxStreak > rules.maxConsecutiveLosses) return { kill: true, reason: `${maxStreak}번 연속 손실 매도 (한도 ${rules.maxConsecutiveLosses}번)`, mdd };
   if (o.driftPct != null && Math.abs(o.driftPct) > rules.maxDrift) return { kill: true, reason: `실거래와 모의 수익 차이 ${Math.round(o.driftPct * 1000) / 10}%p (한도 ${rules.maxDrift * 100}%p)`, mdd };
   return { kill: false, mdd, streak: maxStreak };

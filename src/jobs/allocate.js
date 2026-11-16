@@ -15,8 +15,9 @@ export function dailyReturns(points) {
 export async function allocateTask(env, kv, now) {
   const last = await env.DB.prepare('SELECT t, weights FROM allocations ORDER BY t DESC LIMIT 1').first();
   const prev = last ? { t: last.t, weights: JSON.parse(last.weights) } : null;
-  if (prev && now - prev.t < 7 * DAY) return false;
   const lc = await lifecycleAll(env.DB);
+  const stillOk = (id) => ['live_candidate'].includes(lc[id]?.stage) || ['krx_dca_v1', 'crypto_dca_v1'].includes(id);
+  if (prev && now - prev.t < 7 * DAY && Object.keys(prev.weights).every(stillOk)) return false; // B19: re-run at once if one lost eligibility
   const runs = Object.fromEntries((await getRuns(env.DB)).map((r) => [r.id, r]));
   const cands = [];
   for (const s of allStrategies(kv)) {

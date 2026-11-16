@@ -78,6 +78,13 @@ export function evaluateStage({ strategy, bt, paper, kill, gates = GATE_DEFAULTS
 
   const g = gates.backtest;
   const ho = bt?.holdout || bt?.wf || bt?.oos || null;
+  if (bt) {
+    // B04: missing evidence must FAIL, not silently skip the check ("no failed check" is not "passed")
+    const need = [ho?.totalReturn, ho?.mdd, ho?.sharpe, ho?.bench?.mdd, ho?.bench?.sharpe];
+    if (g.mustBeProfitable2x) need.push(bt.holdout2x?.totalReturn);
+    if (g.minDeflatedSharpe > 0) need.push(bt.dsr);
+    checks.push({ group: '백테스트', ok: !!ho && need.every(Number.isFinite), text: '필수 검증 자료(미사용 구간·기준선·비용 2배·DSR) 모두 있음' });
+  }
   if (bt && ho) {
     const b = ho.bench || {};
     const minT = slow ? g.slowMinTrades : g.minTrades;

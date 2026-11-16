@@ -23,7 +23,10 @@ function sharpeOf(r, ppy) {
  */
 export function allocate(candidates, prev, nowSec, cfg = ALLOC_DEFAULTS) {
   const c = { ...ALLOC_DEFAULTS, ...cfg };
-  if (prev && nowSec - prev.t < c.minIntervalDays * 86400) return { ...prev, changed: false };
+  // B19: a strategy that lost eligibility (halted, failed...) drops to 0 immediately, bypassing interval/step limits
+  const disq = new Set(candidates.filter((x) => !x.benchmarkOnly && !c.eligibleStages.includes(x.stage)).map((x) => x.id));
+  const hasDisq = Object.keys(prev?.weights || {}).some((id) => disq.has(id));
+  if (prev && nowSec - prev.t < c.minIntervalDays * 86400 && !hasDisq) return { ...prev, changed: false };
   const baselines = candidates.filter((x) => x.benchmarkOnly).map((x) => x.id);
   const notes = {};
   const scores = {};
@@ -47,6 +50,7 @@ export function allocate(candidates, prev, nowSec, cfg = ALLOC_DEFAULTS) {
   const prevW = prev?.weights || {};
   const ids = new Set([...Object.keys(target), ...Object.keys(prevW).filter((k) => !baselines.includes(k))]);
   for (const id of ids) {
+    if (disq.has(id)) continue;
     const p = prevW[id] || 0, tgt = target[id] || 0;
     const w = p + Math.max(-c.maxStep, Math.min(c.maxStep, tgt - p));
     if (w > 1e-4) out[id] = Math.round(w * 10000) / 10000;

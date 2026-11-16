@@ -39,14 +39,14 @@ export async function signalsFor(env, strategy, from, toT) {
 }
 
 /** Advance one run by up to maxBars bars. Returns {run, fills, points, events} (not yet persisted). */
-export async function advanceRun(env, kv, strategy, run, toT, maxBars) {
+export async function advanceRun(env, kv, strategy, run, toT, maxBars, { windowFrom = null } = {}) {
   const universe = universeFor(strategy, kv);
   const from = Math.max(run.last_t ?? -Infinity, run.start_after ?? -Infinity);
   const signals = run.mode === 'paper' ? await signalsFor(env, strategy, from, toT) : undefined;
   const guard = run.mode === 'paper' ? await guardFor(env, strategy, from, toT) : undefined; // 코인 시장 신호 (paper only)
   const opts = buildOpts(strategy, { universe, meta: strategy.market === 'krx' ? krxMeta : {}, signals, guard });
   const syms = [...new Set([...universe, ...Object.keys(run.state.kind === 'futures' ? {} : run.state.pos || {}), strategy.benchSym].filter(Boolean))];
-  const series = await loadSeries(env.DB, strategy.market, strategy.timeframe, syms, from - span(strategy), Math.min(toT, from + (maxBars + 3) * barSec(strategy.timeframe) * (strategy.market === 'krx' ? 3 : 1.2)));
+  const series = await loadSeries(env.DB, strategy.market, strategy.timeframe, syms, from - span(strategy), Math.min(toT, Math.max(from, windowFrom ?? from) + (maxBars + 3) * barSec(strategy.timeframe) * (strategy.market === 'krx' ? 3 : 1.2)));
   const feed = new Feed(series);
   const benchSeries = strategy.benchSym && series[strategy.benchSym]?.length ? [strategy.benchSym] : syms;
   const tl = timelineOf(series, benchSeries).filter((t) => t > from && t <= toT).slice(0, maxBars);
@@ -78,9 +78,17 @@ export async function paperTask(env, kv, now, { maxSteps = 2, strategies = allSt
     if (changed.length >= maxSteps) continue;
     const from = Math.max(run.last_t ?? -Infinity, run.start_after ?? -Infinity);
     if (from >= ready) continue;
-    const r = await advanceRun(env, kv, s, run, ready, s.timeframe === '1h' ? 6 : 3);
+    const steps = s.timeframe === '1h' ? 6 : 3;
+    let r = await advanceRun(env, kv, s, run, ready, steps);
+    if (!r.processed) {
+      // B18: an empty short window is NOT proof that nothing exists up to `ready` — jump to the next real bar
+      const syms = [...new Set([s.benchSym, ...universeFor(s, kv)].filter(Boolean))];
+      const next = await env.DB.prepare(`SELECT MIN(t) AS t FROM candles WHERE market = ? AND tf = ? AND sym IN (${syms.map(() => '?').join(',')}) AND t > ? AND t <= ?`)
+        .bind(s.market, s.timeframe, ...syms, from, ready).first();
+      if (next?.t != null) r = await advanceRun(env, kv, s, run, ready, steps, { windowFrom: next.t - barSec(s.timeframe) });
+    }
     const stmts = [runUpsertStmt(env.DB, r.run), ...fillStmts(env.DB, run.id, r.fills), ...equityStmts(env.DB, run.id, r.points), ...r.events.map((e) => eventStmt(env.DB, e))];
-    if (!r.processed) { // nothing in window (data gap): skip ahead safely
+    if (!r.processed) { // truly no bar up to `ready`: skip ahead
       run.last_t = ready;
       stmts[0] = runUpsertStmt(env.DB, run);
     }

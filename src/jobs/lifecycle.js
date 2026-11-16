@@ -28,9 +28,11 @@ export async function signalAgreement(env, kv, strategy, run) {
   const replay = { ...run, state: (strategy.createState || createState)(INITIAL_CASH), last_t: null };
   const res = await advanceRun(env, kv, strategy, replay, run.last_t, 2000);
   const stored = (await fillsOf(env.DB, run.id, 0, 100000)).sort((a, b) => a.t - b.t || a.seq - b.seq);
-  const key = (f) => `${f.t}|${f.sym}|${f.side}|${Math.round(f.qty * 1e6)}|${Math.round(f.price * 100)}`;
-  const want = new Set(res.fills.map(key));
-  const matched = stored.filter((f) => want.has(key(f))).length;
+  const key = (f) => `${f.t}|${f.sym}|${f.side}|${Math.round(f.qty * 1e6)}|${Number(f.price).toPrecision(10)}`;
+  // B06: multiset match — each replayed fill can satisfy at most one stored fill
+  const want = new Map();
+  for (const f of res.fills) want.set(key(f), (want.get(key(f)) || 0) + 1);
+  const matched = stored.filter((f) => { const k = key(f), n = want.get(k) || 0; if (!n) return false; want.set(k, n - 1); return true; }).length;
   const total = Math.max(stored.length, res.fills.length);
   return { matched: total === 0 ? 0 : matched, total, checkedT: run.last_t };
 }
@@ -56,19 +58,21 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
       const m = computeMetrics(pts, fills, { market: s.market, tf: s.timeframe });
       paper = { ...m, bars: pts.length, decisions: pts.length, halted: run.state.halted, haltReason: run.state.haltReason };
       if (s.timeframe === '1h') paper.days = Math.round((pts.length ? pts[pts.length - 1].t - pts[0].t : 0) / DAY);
-      // signal agreement: at most once per day, only for strategies that can be promoted
+      // signal agreement: only for strategies that can be promoted
       if (!s.benchmarkOnly && !s.researchOnly && !s.external) {
         const ak = `agree:${s.id}`;
         let a = kv[ak];
         if (!a || a.checkedT !== run.last_t) {
           const bars = run.state.bars || 0;
-          if ((!a || (a.at || 0) < now - DAY) && replays === 0 && bars <= 160) {
+          // replay whenever the ledger moved (stale agreement no longer counts); one replay per invocation for CPU
+          if (replays === 0 && bars <= 160) {
             replays++;
             a = { ...(await signalAgreement(env, kv, s, run)), at: now };
             kv[ak] = a; stmts.push(kvSetStmt(env.DB, ak, a));
           }
         }
-        paper.agreement = a || null;
+        // B05: only an agreement checked up to the CURRENT last_t counts (stale success must not promote)
+        paper.agreement = a && a.checkedT === run.last_t ? a : null;
       } else if (s.external) paper.agreement = run.state.agreement || null; // reported by the external engine
     }
     let kill = null;

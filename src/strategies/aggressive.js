@@ -5,7 +5,7 @@
 import { sma, roc } from '../core/indicators.js';
 import { symName } from '../config.js';
 import { weekday } from './common.js';
-import { DAY } from '../core/calendar.js';
+import { DAY, HOUR } from '../core/calendar.js';
 
 const SLEEVE_RISK = { maxPositionWeight: 0.25, minCash: 0.20, dailyLossLimit: 0.06, weeklyLossLimit: 0.12, maxDrawdownHalt: 0.35, haltCooldownBars: 1e9 };
 const pct = (x) => `${x >= 0 ? '+' : ''}${Math.round(x * 1000) / 10}%`;
@@ -71,7 +71,8 @@ export const volBreakoutV1 = {
       if (!today || !prev) continue;
       const held = ctx.positions[sym] > 0;
       const entered = ctx.entries[sym];
-      if (held && Math.floor(entered / DAY) < day) { targets[sym] = 0; reasons[sym] = `${symName(sym)}: 하루가 지나 다음 날 첫 시간에 정리 (변동성 돌파 규칙)`; changed = true; continue; }
+      // B14: decide at the close of the 08:00-09:00 KST bar so the exit fills at the 09:00 KST open
+      if (held && Math.floor(entered / DAY) < Math.floor((ctx.t + HOUR) / DAY)) { targets[sym] = 0; reasons[sym] = `${symName(sym)}: 하루가 지나 다음 날 첫 시간에 정리 (변동성 돌파 규칙)`; changed = true; continue; }
       if (held) { targets[sym] = ctx.weights[sym]; continue; }
       const closes = [];
       for (let d = day - p.maDays; d < day; d++) if (byDay.get(d)) closes.push(byDay.get(d).c);
