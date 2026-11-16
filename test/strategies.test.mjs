@@ -105,7 +105,9 @@ test('static safety: no live order capability anywhere in src/', () => {
   const fetchHosts = files.flatMap((f) => [...readFileSync(f, 'utf8').matchAll(/https:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]));
   const allowed = new Set(['api.upbit.com', 'data-dbg.krx.co.kr', 'apis.data.go.kr', 'fchart.stock.naver.com', 'api.telegram.org', 'news.google.com', 'api.alternative.me', 'opendart.fss.or.kr',
     // 코인 시장 신호 (public, read-only market data; risk signals only)
-    'api.bithumb.com', 'data-api.binance.vision', 'www.binance.com', 'api.exchange.coinbase.com', 'www.okx.com', 'open.er-api.com', 't.me', 'api.hyperliquid.xyz']);
+    'api.bithumb.com', 'data-api.binance.vision', 'www.binance.com', 'api.exchange.coinbase.com', 'www.okx.com', 'open.er-api.com', 't.me', 'api.hyperliquid.xyz',
+    // read-only news headline RSS (AI 판단 inputs)
+    'www.yna.co.kr', 'www.hankyung.com', 'www.blockmedia.co.kr', 'www.tokenpost.kr']);
   for (const h of fetchHosts) assert.ok(allowed.has(h), `unexpected host ${h}`);
 });
 

@@ -18,15 +18,28 @@ export function parseRssTitles(xml, max = 15) {
 
 export const FEEDS = [
   {
-    id: 'news_kr', name: '뉴스 제목(구글 뉴스 RSS, 한국어)', every: 6 * HOUR, needs: null,
+    id: 'news_kr', name: '뉴스 제목(언론사 RSS + 구글 뉴스, 한국어)', every: 6 * HOUR, needs: null,
+    // Google News blocks Cloudflare egress (503), so publisher RSS feeds are the main source; each source is optional
+    // and the feed only fails when ALL of them fail. Only the newest part of each feed is parsed (CPU budget).
+    sources: [
+      ['*krx', 'https://www.yna.co.kr/rss/economy.xml'],
+      ['*krx', 'https://www.hankyung.com/feed/finance'],
+      ['*crypto', 'https://www.blockmedia.co.kr/feed'],
+      ['*crypto', 'https://www.tokenpost.kr/rss'],
+    ],
     queries: [['*crypto', '비트코인 OR 이더리움'], ['*krx', '코스피 OR 증시'], ['379800', 'S&P500 미국증시']],
     async fetch(fetcher, env, now) {
-      const items = [];
-      for (const [sym, q] of this.queries) {
-        const res = await fetcher(`https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=ko&gl=KR&ceid=KR:ko`);
-        if (!res.ok) throw new Error(`NEWS_HTTP_${res.status}`);
-        for (const it of parseRssTitles(await res.text(), 10)) if (!it.t || it.t > now - 2 * DAY) items.push({ sym, t: it.t || now, type: 'headline', payload: { title: it.title } });
+      const items = [], errors = [];
+      const take = (sym, xml, n) => { for (const it of parseRssTitles(String(xml).slice(0, 60000), n)) if (!it.t || it.t > now - 2 * DAY) items.push({ sym, t: it.t || now, type: 'headline', payload: { title: it.title } }); };
+      for (const [sym, url] of this.sources) {
+        try { const res = await fetcher(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; family-invest-paper/2; read-only headlines)' } }); if (!res.ok) throw new Error(String(res.status)); take(sym, await res.text(), 12); }
+        catch (e) { errors.push(`${url.split('/')[2]}:${String(e?.message || e).slice(0, 20)}`); }
       }
+      for (const [sym, q] of this.queries) {
+        try { const res = await fetcher(`https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=ko&gl=KR&ceid=KR:ko`); if (!res.ok) throw new Error(String(res.status)); take(sym, await res.text(), 10); }
+        catch (e) { errors.push(`google:${String(e?.message || e).slice(0, 20)}`); }
+      }
+      if (errors.length === this.sources.length + this.queries.length) throw new Error(`NEWS_ALL_FAILED ${errors.join(',')}`.slice(0, 120));
       return items;
     },
   },
