@@ -19,7 +19,7 @@ export const DEFAULTS = Object.freeze({
 });
 
 // Event kinds → category. Kinds not listed are never sent (fills, daily_loss, market_signal, ...).
-export const KIND_CATEGORY = { promote: 'lifecycle', kill: 'lifecycle', halt: 'lifecycle', resume: 'lifecycle', stage: 'lifecycle', market_alert: 'crypto', data_error: 'data' };
+export const KIND_CATEGORY = { promote: 'lifecycle', kill: 'lifecycle', halt: 'lifecycle', resume: 'lifecycle', stage: 'lifecycle', market_alert: 'crypto', data_error: 'data', data_warn: 'data' };
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]0)$/;
 export const toMin = (hhmm) => { const m = TIME_RE.exec(String(hhmm ?? '')); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };

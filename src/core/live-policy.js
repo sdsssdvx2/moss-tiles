@@ -1,6 +1,6 @@
 // FUTURE live-module policy (data model + pure rules only).
 // Nothing in this repository sends orders. These rules are evaluated today against the
-// PAPER ("shadow") results of strategies that reached 실거래 가능(소액), so the kill switch
+// PAPER ("shadow") results of strategies that reached 운영 점검 통과(실력 증명 아님), so the kill switch
 // is exercised and tested long before any real money is involved.
 // Defaults: RESEARCH-STRATEGY-KO.md 5-2 (G3/G4) and 5-3.
 import { GATE_DEFAULTS } from './lifecycle.js';

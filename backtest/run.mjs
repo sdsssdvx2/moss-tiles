@@ -12,12 +12,12 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { STRATEGIES, byId, trialsFor } from '../src/strategies/index.js';
+import { STRATEGIES, byId, trialsFor, variantStrategies } from '../src/strategies/index.js';
 import { runBacktest, walkForward, gridVariants } from '../src/core/backtest.js';
 import { evaluateStage, GATE_DEFAULTS } from '../src/core/lifecycle.js';
-import { deflatedSharpe, periodReturns } from '../src/core/stats.js';
+import { deflatedSharpe, periodReturns, expectedMaxSharpe } from '../src/core/stats.js';
 import { mergeCosts, stressCosts } from '../src/core/costs.js';
-import { computeMetrics } from '../src/core/metrics.js';
+import { computeMetrics, riskMatched } from '../src/core/metrics.js';
 import { fetchUpbitCandles, finalOnly } from '../src/data/upbit.js';
 import { fetchNaverDaily } from '../src/data/krx.js';
 import { DAY, HOUR, ymd, latestFinalKrxDay, latestFinalCryptoDay, latestFinalHour } from '../src/core/calendar.js';
@@ -141,6 +141,20 @@ function srStd(results) {
   return Math.sqrt(sr.reduce((a, b) => a + (b - m) ** 2, 0) / (sr.length - 1));
 }
 
+/**
+ * 연구실 전체 시도 수(여러 전략 중 우연히 좋은 것을 고르는 효과 보정용): 모든 비기준선 가족의
+ * (등록 버전·그리드 + 이전 탈락 시도) + 주간 연구 장부의 변형 시도. 비교 장부(AI·거부권)도 각각 1번의 시도로 센다.
+ */
+export function labTrialsCount(registry = STRATEGIES) {
+  const fam = new Map();
+  for (const s of registry) {
+    if (s.benchmarkOnly || s.external) continue;
+    fam.set(s.family, Math.max(fam.get(s.family) || 0, trialsFor(s, registry) + ledgerTrials(s.family)));
+  }
+  return [...fam.values()].reduce((a, b) => a + b, 0);
+}
+let LAB_TRIALS = 0;
+
 export function evaluateStrategy(s, data, { params: forced, extraTrials = 0 } = {}) {
   const series = seriesFor(s, data);
   const tl = timeline(s, series);
@@ -177,12 +191,25 @@ export function evaluateStrategy(s, data, { params: forced, extraTrials = 0 } = 
   const ho2 = runBacktest({ ...full, fromT: hoFrom, costs: stressCosts(mergeCosts(s.market)) });
   const all = runBacktest({ ...full, fromT: tl[warm] });
   const trials = trialsFor(s) + extraTrials;
-  const dsr = deflatedSharpe(periodReturns(ho.points), trials, srStd(gridResults.map((g) => g.r)));
+  const hoRet = periodReturns(ho.points);
+  const dsr = deflatedSharpe(hoRet, trials, srStd(gridResults.map((g) => g.r)));
+  // 위험 맞춤 기준선: 평균 투자 비율만큼 지수 + 나머지 단기채권(코인은 현금), 매월 조정 (lifecycle G1 검사)
+  const bond = s.market === 'krx' ? (data.krx['153130'] || null) : null;
+  const opt = { market: s.market, tf: s.timeframe };
+  if (s.benchSym && series[s.benchSym]) {
+    ho.metrics.riskMatched = riskMatched(ho.points, series[s.benchSym], bond, opt);
+    all.metrics.riskMatched = riskMatched(all.points, series[s.benchSym], bond, opt);
+  }
+  const labTrials = Math.max(trials, LAB_TRIALS);
+  const dsrLab = deflatedSharpe(hoRet, labTrials);
+  const ppy0 = s.market === 'krx' ? 252 : s.timeframe === '1h' ? 24 * 365 : 365;
+  const luckSharpe = expectedMaxSharpe(labTrials, hoRet.length, ppy0);
   const years = (tl[tl.length - 1] - tl[warm]) / DAY / 365.25;
   const proxyNote = s.market === 'krx' && (series['278530']?.[0]?.proxy) ? '278530 상장(2017) 이전은 KODEX 200(069500)으로 대체' : null;
   return {
     params: { ...s.params, ...params }, wf: wf.oos, folds: wf.folds.length, holdout: ho.metrics, holdout2x: ho2.metrics, full: all.metrics,
     totalTrades: all.metrics.trades, years: Math.round(years * 10) / 10, dsr: Math.round(dsr * 1000) / 1000, trials,
+    labTrials, dsrLab: Math.round(dsrLab * 1000) / 1000, luckSharpe: Math.round(luckSharpe * 100) / 100,
     range: `${ymd(tl[warm])} ~ ${ymd(tl[tl.length - 1])}`, holdoutFrom: ymd(hoFrom), source: data.source === 'fixtures' ? 'fixtures' : 'local', proxyNote,
     generatedAt: NOW, curve: downsample(all.points.map((p) => ({ t: p.t, e: Math.round(p.equity), b: Math.round(p.bench) })), 200),
   };
@@ -302,30 +329,97 @@ function seedSql(data, results, research) {
 // ---------------- report ----------------
 const pc = (x) => (x == null ? '-' : `${x >= 0 ? '+' : ''}${(x * 100).toFixed(1)}%`);
 function reportKo(results, research) {
+  const any = Object.values(results)[0];
   const L = [`# 백테스트 결과 (${ymd(NOW)} 생성, 데이터: ${flag('--fixtures') ? '테스트용 가짜 데이터' : '업비트·네이버 공개 시세'})`, '',
-    '판정은 "끝까지 안 본 마지막 25% 구간(보존 구간)" 기준입니다. 비용(수수료·세금·미끄러짐)을 뺀 값입니다.', '',
-    '| 전략 | 기간 | 보존구간 수익 | 기준선 | 비용2배 | 최대낙폭(기준선) | 샤프 | 전체 거래 | DSR(시도) | 1단계 판정 |', '|---|---|---|---|---|---|---|---|---|---|'];
-  for (const s of STRATEGIES) {
+    '판정은 "끝까지 안 본 마지막 25% 구간(보존 구간)" 기준입니다. 비용(수수료·미끄러짐·해외주식형/채권형 ETF 매매차익 15.4% 세금)을 뺀 값입니다.',
+    '**주의: 보존 구간도 설계하는 사람이 이미 지나간 시기라 "완전히 처음 보는 자료"가 아닙니다. 진짜 처음 보는 자료는 2026-11-16 이후 모의 기록뿐입니다.**', '',
+    `여러 전략 중 우연히 좋은 것을 고르는 효과: 연구실 전체 시도 ${any?.labTrials ?? '-'}개 → 실력이 전혀 없어도 그중 최고 샤프는 운만으로 약 **${any?.luckSharpe ?? '-'}** (보존 구간 길이 기준) 나올 수 있습니다.`, '',
+    '| 전략 | 기간 | 보존구간 수익 | 그냥 보유 | 위험 맞춤 기준(지수 비중) | 비용2배 | 최대낙폭(보유 / 위험맞춤) | 샤프(위험맞춤) | 전체 거래 | DSR 가족(시도) | DSR 연구실 전체 | 1단계 판정 |', '|---|---|---|---|---|---|---|---|---|---|---|---|'];
+  const all = [...STRATEGIES, ...variantStrategies(readVariants())];
+  for (const s of all) {
     const r = results[s.id];
     if (!r) continue;
     const g = evaluateStage({ strategy: s, bt: r, paper: null });
     const verdict = s.benchmarkOnly ? '기준선' : g.stage === 'bt_failed' ? '미통과' : '통과 → 모의 검증' + (s.researchOnly ? '(연구용)' : '');
-    L.push(`| ${s.name} | ${r.years}년 | ${pc(r.holdout.totalReturn)} | ${pc(r.holdout.bench.totalReturn)} | ${pc(r.holdout2x.totalReturn)} | ${(r.holdout.mdd * 100).toFixed(1)}% (${(r.holdout.bench.mdd * 100).toFixed(1)}%) | ${r.holdout.sharpe.toFixed(2)} | ${r.totalTrades} | ${Math.round(r.dsr * 100)}% (${r.trials}) | ${verdict} |`);
+    const rm = r.holdout.riskMatched;
+    L.push(`| ${s.name} | ${r.years}년 | ${pc(r.holdout.totalReturn)} | ${pc(r.holdout.bench.totalReturn)} | ${rm ? `${pc(rm.totalReturn)} (${Math.round(rm.weight * 100)}%)` : '-'} | ${pc(r.holdout2x.totalReturn)} | ${(r.holdout.mdd * 100).toFixed(1)}% (${(r.holdout.bench.mdd * 100).toFixed(1)}% / ${rm ? (rm.mdd * 100).toFixed(1) + '%' : '-'}) | ${r.holdout.sharpe.toFixed(2)} (${rm ? rm.sharpe.toFixed(2) : '-'}) | ${r.totalTrades} | ${Math.round(r.dsr * 100)}% (${r.trials}) | ${Math.round((r.dsrLab ?? 0) * 100)}% | ${verdict} |`);
   }
   if (research) { L.push('', '## 자동 연구(변형 탐색)', ''); for (const v of research.variants) L.push(`- 새 후보 ${v.id}: ${JSON.stringify(v.params)} (누적 시도 ${v.trials})`); if (!research.variants.length) L.push('- 이번 주 통과한 새 변형 없음 (정상: 대부분 탈락해야 함)'); }
-  L.push('', '※ 과거 성과는 미래를 보장하지 않습니다. 대형주·코인 목록은 "지금" 기준이라 생존 편향이 있습니다.');
+  L.push('', '※ 과거 성과는 미래를 보장하지 않습니다. 대형주·코인 목록은 "지금" 기준이라 생존 편향이 있습니다. 투자 조언이 아닙니다.');
   return L.join('\n');
+}
+
+// ---------------- leverage study (모의 전용 선물 시뮬레이션, 2026-11-18) ----------------
+/**
+ * Same BTC trend rule (btc_perp_sim_v1) at 1x/2x/3x, three account sizes, with exchange lot size 0.001 BTC,
+ * plus stress rows (no exchange stop, funding x3). Isolated margin: a liquidation loses that margin entirely.
+ */
+export function leverageStudy(data) {
+  const base = byId.btc_perp_sim_v1;
+  const series = data.crypto1d;
+  const tl = (series['KRW-BTC'] || []).map((b) => b.t);
+  const warm = Math.min(base.lookback, Math.floor(tl.length / 4));
+  if (tl.length < warm + 200) return null;
+  const hoFrom = holdoutFrom(`crypto:1d:KRW-BTC`, tl, warm);
+  const lot = { qtyStep: 0.001, minQty: 0.001 }; // Binance BTCUSDT LOT_SIZE (2026-11-18 exchangeInfo), min notional 50 USDT
+  const run = (lev, { account = 10_000_000, stop = true, funding = base.params.fundingPer8h, fromT = tl[warm] } = {}) => {
+    const s = { ...base, params: { ...base.params, leverage: lev, stopAtr: stop ? base.params.stopAtr : 0, fundingPer8h: funding, ...lot } };
+    const r = runBacktest({ strategy: s, series, fromT, initialCash: account });
+    const st = r.state;
+    return { lev, account, stop, funding, totalReturn: r.metrics.totalReturn, cagr: r.metrics.cagr, mdd: r.metrics.mdd, liquidations: st.liquidations || 0,
+      entries: r.fills.filter((f) => f.phase === 'entry').length, skipped: st.skippedMin || 0,
+      // 비용이 먹은 몫 = (수수료+펀딩) ÷ 비용 차감 전 이익 (복리로 커진 금액을 원금과 비교하면 과장되므로)
+      costShare: (() => { const c = (st.fees || 0) + (st.funding || 0); const gross = st.equity - account + c; return gross > 0 ? Math.round((c / gross) * 10000) / 10000 : null; })() };
+  };
+  const won = (n) => (n >= 1e7 ? `${n / 1e7 * 1000}만` : `${n / 1e4}만`);
+  const ho = `보존 구간(${ymd(hoFrom)}~)`, full = '전체(설계 기간 포함)';
+  const rows = [];
+  for (const lev of [1, 2, 3]) rows.push({ label: `${lev}배 · 가상 1000만 원 · 손절 있음`, period: full, ...run(lev) });
+  rows.push({ label: '3배 · 손절 없음(스트레스)', period: full, ...run(3, { stop: false }) });
+  rows.push({ label: '3배 · 펀딩비 3배(0.03%/8h, 2021년 수준)', period: full, ...run(3, { funding: 0.0003 }) });
+  for (const account of [10_000_000, 1_000_000, 100_000]) for (const lev of [1, 2, 3]) rows.push({ label: `${lev}배 · 가상 ${won(account)} 원 · 손절 있음`, period: ho, ...run(lev, { account, fromT: hoFrom }) });
+  rows.push({ label: '3배 · 가상 1000만 원 · 손절 없음(스트레스)', period: ho, ...run(3, { stop: false, fromT: hoFrom }) });
+  // 규칙 없이 계속 롱(청산되면 다음 날 남은 돈의 50%로 다시 진입): 레버리지 자체의 청산 위험을 보여 주는 대조군
+  const alwaysLong = { ...base, id: 'always_long_sim', decideFutures: (ctx) => (ctx.position ? null : { order: { action: 'open', side: 1, size: 0.5, stopDist: 0, reason: '대조군: 규칙 없이 롱' } }) };
+  for (const lev of [1, 2, 3]) {
+    for (const [period, fromT] of [[full, tl[warm]], [ho, hoFrom]]) {
+      const r = runBacktest({ strategy: { ...alwaysLong, params: { ...base.params, leverage: lev, ...lot } }, series, fromT, initialCash: 10_000_000 });
+      const st = r.state, c = (st.fees || 0) + (st.funding || 0), gross = st.equity - 10_000_000 + c;
+      rows.push({ label: `대조군: 규칙 없이 계속 롱 ${lev}배`, period, lev, account: 10_000_000, stop: false, funding: base.params.fundingPer8h, totalReturn: r.metrics.totalReturn, cagr: r.metrics.cagr, mdd: r.metrics.mdd,
+        liquidations: st.liquidations || 0, entries: r.fills.filter((f) => f.phase === 'entry').length, skipped: st.skippedMin || 0, costShare: gross > 0 ? Math.round((c / gross) * 10000) / 10000 : null });
+    }
+  }
+  const bh = runBacktest({ strategy: byId.crypto_bh_v1, series, fromT: tl[warm] }).metrics;
+  const bhHo = runBacktest({ strategy: byId.crypto_bh_v1, series, fromT: hoFrom }).metrics;
+  rows.push({ label: '참고: 비트코인 그냥 보유(현물 1배, 100% 투자)', period: full, lev: 1, account: 10_000_000, stop: false, funding: 0, totalReturn: bh.totalReturn, cagr: bh.cagr, mdd: bh.mdd, liquidations: 0, entries: 1, skipped: 0, costShare: 0 });
+  rows.push({ label: '참고: 비트코인 그냥 보유(현물 1배, 100% 투자)', period: ho, lev: 1, account: 10_000_000, stop: false, funding: 0, totalReturn: bhHo.totalReturn, cagr: bhHo.cagr, mdd: bhHo.mdd, liquidations: 0, entries: 1, skipped: 0, costShare: 0 });
+  return { range: `${ymd(tl[warm])} ~ ${ymd(tl[tl.length - 1])}`, rows,
+    note: '전체 기간 숫자는 규칙을 만들 때 이미 본 2018~2024년 상승장이 섞여 크게 부풀려져 있음 → 보존 구간을 보세요. 배수 = 증거금 대비 계약 크기(자본의 50%를 증거금으로 사용 → 1배는 자본 대비 0.5배 노출, 3배는 1.5배 노출). 업비트 현물 일봉으로 계산한 근사(실제 선물 가격·펀딩·청산 엔진과 다름). 과거 성과는 미래를 보장하지 않음.' };
+}
+function leverageMd(L) {
+  if (!L) return '';
+  const pc0 = (x) => `${x >= 0 ? '+' : ''}${(x * 100).toFixed(0)}%`;
+  return ['## 레버리지 배수 비교 (모의 전용 · 선물 시뮬레이션)', '', `기간 ${L.range}. ${L.note}`, '', '| 조건 | 기간 | 총수익 | 연수익 | 최대 낙폭 | 강제 청산 | 진입 | 최소 주문 미달 | 비용이 먹은 몫(수수료+펀딩 ÷ 비용 전 이익) |', '|---|---|---|---|---|---|---|---|---|',
+    ...L.rows.map((r) => `| ${r.label} | ${r.period} | ${pc0(r.totalReturn)} | ${pc(r.cagr)} | ${(r.mdd * 100).toFixed(1)}% | ${r.liquidations}회 | ${r.entries}회 | ${r.skipped}회 | ${r.costShare == null ? '-' : r.costShare > 1 ? '이익보다 큼' : (r.costShare * 100).toFixed(1) + '%'} |`), ''].join('\n');
 }
 
 async function main() {
   const data = await loadData();
   const only = opt('--only')?.split(',');
   const results = {};
-  for (const s of STRATEGIES) {
-    if (s.external || (only && !only.includes(s.id))) continue;
+  LAB_TRIALS = labTrialsCount();
+  log(`· 연구실 전체 시도 수(보정용): ${LAB_TRIALS}`);
+  // registered weekly-research variants are re-evaluated too, so their evidence (risk-matched baseline etc.) stays current
+  for (const s of [...STRATEGIES, ...variantStrategies(readVariants())]) {
+    if (s.external || s.noBacktest || (only && !only.includes(s.id))) continue;
     const t0 = Date.now();
     try {
-      const r = evaluateStrategy(s, data, { extraTrials: ledgerTrials(s.family) });
+      // a registered variant already carries the family total at registration (priorTrials); add only trials spent since
+      // an overlay (AI·뉴스 거부권 비교 장부) is the base rule plus one more idea: it inherits the base family's trials
+      const baseOf = s.overlayOf ? byId[s.overlayOf] : null;
+      const extra = s.generated ? Math.max(0, ledgerTrials(s.family) - (s.priorTrials || 0))
+        : baseOf ? trialsFor(baseOf) + ledgerTrials(baseOf.family) + ledgerTrials(s.family) : ledgerTrials(s.family);
+      const r = evaluateStrategy(s, data, { extraTrials: extra });
       if (!r) { log(`  - ${s.id}: 데이터 부족`); continue; }
       results[s.id] = r;
       log(`  · ${s.id.padEnd(22)} ${r.range}  보존구간 ${pc(r.holdout.totalReturn)} (기준 ${pc(r.holdout.bench.totalReturn)})  MDD ${(r.holdout.mdd * 100).toFixed(1)}%  샤프 ${r.holdout.sharpe.toFixed(2)}  거래 ${r.totalTrades}  DSR ${r.dsr}  [${((Date.now() - t0) / 1000).toFixed(1)}s]`);
@@ -339,12 +433,14 @@ async function main() {
   if (!remote) remote = { variants: readVariants(), trials: {} };
   const res = flag('--research') ? await research(data, results, remote) : null;
   const tag = flag('--fixtures') ? 'fixtures' : 'latest';
-  writeFileSync(join(OUT, `${tag}.json`), JSON.stringify({ generatedAt: NOW, results, research: res }, null, 1));
-  writeFileSync(join(OUT, `${tag}-report-ko.md`), reportKo(results, res));
+  let lev = null;
+  try { lev = leverageStudy(data); } catch (e) { log(`  ! leverage study: ${e.message}`); }
+  writeFileSync(join(OUT, `${tag}.json`), JSON.stringify({ generatedAt: NOW, results, research: res, leverage: lev }, null, 1));
+  writeFileSync(join(OUT, `${tag}-report-ko.md`), reportKo(results, res) + '\n\n' + leverageMd(lev));
   log(`\n결과: backtest/results/${tag}.json, ${tag}-report-ko.md`);
   const seedOut = opt('--seed-sql');
   if (seedOut) { writeFileSync(seedOut, seedSql(data, results, res)); log(`D1 시드 SQL: ${seedOut}`); }
-  const body = importBody(results, res);
+  const body = importBody(results, res, lev);
   const exportOut = opt('--export');
   if (exportOut) { writeFileSync(exportOut, JSON.stringify(body)); log(`가져오기 파일(워커가 RESEARCH_URL 로 읽음): ${exportOut}`); }
   if (res?.variants?.length && !flag('--fixtures')) writeFileSync(VARIANTS, JSON.stringify([...readVariants(), ...res.variants.map(({ summary, ...v }) => v)], null, 1));
@@ -357,9 +453,9 @@ async function main() {
 }
 
 /** Body for /api/import and for the pulled import.json (same validation on the Worker side). */
-export function importBody(results, res) {
+export function importBody(results, res, leverage = null) {
   const body = {
-    format: 'fip-research-1', generatedAt: NOW,
+    format: 'fip-research-1', generatedAt: NOW, leverage,
     backtests: Object.entries(results).map(([id, r]) => { const { curve, ...summary } = r; return { strategy_id: id, kind: 'wf', source: r.source, summary, curve }; }),
     variants: (res?.variants || []).map(({ summary, ...v }) => v),
     trials: res?.trials || null,

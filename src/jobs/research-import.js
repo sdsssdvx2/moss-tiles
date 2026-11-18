@@ -26,6 +26,13 @@ export async function importResearch(env, body) {
     for (const [f, n] of Object.entries(body.trials)) t[f] = Math.max(t[f] || 0, n | 0); // trial counts only ever grow
     stmts.push(kvSetStmt(env.DB, 'research:trials', t));
   }
+  // 레버리지 배수 비교(모의 전용 선물 시뮬레이션) 표: 숫자·짧은 문자열만, 최대 40줄
+  if (body?.leverage && Array.isArray(body.leverage.rows)) {
+    const num = (x) => (Number.isFinite(+x) ? +x : null);
+    const rows = body.leverage.rows.slice(0, 40).map((r) => ({ label: String(r.label || '').slice(0, 60), lev: num(r.lev), account: num(r.account), stop: !!r.stop, funding: num(r.funding),
+      period: String(r.period || '').slice(0, 20), totalReturn: num(r.totalReturn), cagr: num(r.cagr), mdd: num(r.mdd), liquidations: num(r.liquidations), entries: num(r.entries), skipped: num(r.skipped), costShare: num(r.costShare) }));
+    stmts.push(kvSetStmt(env.DB, 'research:leverage', { generatedAt: Number(body.generatedAt) | 0, range: String(body.leverage.range || '').slice(0, 40), note: String(body.leverage.note || '').slice(0, 300), rows }));
+  }
   let bt = 0;
   for (const r of (body?.backtests || []).slice(0, 60)) {
     if (!known.has(r.strategy_id) || !['wf', 'grid'].includes(r.kind)) continue;

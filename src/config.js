@@ -18,6 +18,20 @@ export const CASH_LIKE = new Set(['153130']);
 export const CASH_LIKE_EXEMPT_FROM = Date.UTC(2026, 10, 20) / 1000; // 2026-11-20 bar label (UTC midnight)
 export const cashLikeExempt = (sym, t) => CASH_LIKE.has(sym) && t >= CASH_LIKE_EXEMPT_FROM;
 
+/**
+ * 2026-11-18 평가 정직화 묶음(세금·새 규칙)이 모의 장부에 적용되는 첫 봉(UTC 자정 = KST 날짜 라벨).
+ * 이 봉 이전에 이미 저장된 모의 체결은 옛 규칙 그대로 재생되어 1:1 일치가 유지된다.
+ * 백테스트(과거 검증)는 처음부터 새 규칙을 쓴다. → 2026-11-24(화) 08:00 KST 전에 배포해야 함.
+ */
+export const RULES_20261118_FROM = Date.UTC(2026, 10, 23) / 1000; // 2026-11-23 (월) 봉
+
+/**
+ * 매매차익 과세 ETF(국내 상장 '기타 ETF': 해외주식형·채권형). 매도 차익(비용 차감 후)에 배당소득세 15.4% 원천징수.
+ * 정확한 과세표준은 min(매매차익, 과표기준가 증가분)이라 실제 세금은 이 근사보다 같거나 적다(보수적 근사).
+ * 국내주식형 ETF(069500·102110·278530)는 매매차익 비과세, ETF 매도는 증권거래세 면제(분배금 15.4%는 TR이라 미반영).
+ */
+export const ETF_GAIN_TAXED = new Set(['379800', '153130']);
+
 export const KRX_STOCKS = {
   '005930': '삼성전자',
   '000660': 'SK하이닉스',
@@ -50,7 +64,7 @@ export const ETF_NAV_UNIVERSE = [...new Set([
 ])];
 
 export const KRX_ALL = { ...KRX_ETFS, ...KRX_STOCKS };
-export const krxMeta = Object.fromEntries(Object.keys(KRX_ALL).map((s) => [s, { etf: s in KRX_ETFS, name: KRX_ALL[s] }]));
+export const krxMeta = Object.fromEntries(Object.keys(KRX_ALL).map((s) => [s, { etf: s in KRX_ETFS, name: KRX_ALL[s], gainTax: ETF_GAIN_TAXED.has(s) }]));
 
 // Core long-lived Upbit KRW markets. The live collector adds the current top-volume
 // markets (up to CRYPTO_MAX) on top of BTC/ETH; stablecoins and 유의종목 are excluded.

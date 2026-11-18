@@ -74,3 +74,39 @@ export function chainSegments(segments, start = 1) {
   }
   return out;
 }
+
+/**
+ * 위험 맞춤 기준선(고정 비율): 지수 `a`를 비중 w만큼, 나머지는 `b`(단기채권 ETF; 없으면 현금 0%)로 들고
+ * 매월 첫 봉 종가에 비중을 다시 맞춘다. 전략의 평균 투자 비율과 같은 위험만 진 "아무 판단 없는" 비교 대상.
+ * 비용은 빼지 않음(기준선에 유리 = 전략에 보수적). 반환: [{t, equity, bench, invested}]
+ */
+export function fixedMixCurve(ts, a, b, w, start = 1) {
+  const pa = new Map((a || []).map((x) => [x.t, x.c])), pb = new Map((b || []).map((x) => [x.t, x.c]));
+  const out = [];
+  let ua = 0, ub = 0, cash = start, lastA = null, lastB = null, mon = null;
+  for (const t of ts) {
+    if (pa.has(t)) lastA = pa.get(t);
+    if (pb.has(t)) lastB = pb.get(t);
+    if (lastA == null) continue;
+    const eq = cash + ua * lastA + (lastB != null ? ub * lastB : 0);
+    const d = new Date(t * 1000), m = d.getUTCFullYear() * 12 + d.getUTCMonth();
+    if (m !== mon) {
+      mon = m;
+      ua = (eq * w) / lastA;
+      if (lastB != null && b) { ub = (eq * (1 - w)) / lastB; cash = 0; } else { ub = 0; cash = eq * (1 - w); }
+    }
+    const e2 = cash + ua * lastA + (lastB != null ? ub * lastB : 0);
+    out.push({ t, equity: e2, bench: e2, invested: ua * lastA });
+  }
+  return out;
+}
+
+/** Same as fixedMixCurve but from already-computed equity points of a strategy: matches its average exposure. */
+export function riskMatched(points, a, b, { market = 'krx', tf = '1d' } = {}) {
+  if (!points?.length) return null;
+  const exp = points.reduce((s, p) => s + (p.equity > 0 ? (p.invested || 0) / p.equity : 0), 0) / points.length;
+  const curve = fixedMixCurve(points.map((p) => p.t), a, b, Math.max(0, Math.min(1, exp)), points[0].equity);
+  if (curve.length < 2) return null;
+  const m = computeMetrics(curve, [], { market, tf });
+  return { weight: r4(exp), totalReturn: m.totalReturn, cagr: m.cagr, mdd: m.mdd, sharpe: m.sharpe, cash: b ? 'bond' : 'cash' };
+}

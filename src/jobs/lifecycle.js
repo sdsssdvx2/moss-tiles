@@ -14,7 +14,8 @@ export function gatesFrom(env) {
 }
 
 /** Pick the backtest evidence for the gate: local heavy runner first, worker re-run as fallback. */
-export function btEvidence(rows, id) {
+export function btEvidence(rows, id, strategy = null) {
+  if (strategy?.noBacktest) return null; // e.g. AI 단독: no historical AI judgments exist, so any backtest would be an empty no-op
   const local = rows.find((r) => r.strategy_id === id && r.kind === 'wf');
   if (local) return local.summary;
   const w = rows.find((r) => r.strategy_id === id && r.kind === 'worker');
@@ -49,15 +50,15 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
   for (const s of allStrategies(kv)) {
     const p = prev[s.id];
     const run = runs[`${s.id}:paper`];
-    if (only && !only.includes(s.id) && p) { rows.push({ ...p, id: s.id, btSharpe: btEvidence(bts, s.id)?.holdout?.sharpe }); continue; }
-    const bt = btEvidence(bts, s.id);
+    if (only && !only.includes(s.id) && p) { rows.push({ ...p, id: s.id, btSharpe: btEvidence(bts, s.id, s)?.holdout?.sharpe }); continue; }
+    const bt = btEvidence(bts, s.id, s);
     let paperSince = Math.max(p?.paper_since || 0, run?.state?.epochT || 0) || null;
     let paper = null;
     if (run && run.last_t != null) {
       const pts = await equityPoints(env.DB, run.id, paperSince || 0);
       const fills = (await fillsOf(env.DB, run.id, paperSince || 0, 5000)).reverse();
       const m = computeMetrics(pts, fills, { market: s.market, tf: s.timeframe });
-      paper = { ...m, bars: pts.length, decisions: pts.length, halted: run.state.halted, haltReason: run.state.haltReason };
+      paper = { ...m, bars: pts.length, decisions: pts.length, rebalances: new Set(fills.map((f) => f.t)).size, halted: run.state.halted, haltReason: run.state.haltReason };
       if (s.timeframe === '1h') paper.days = Math.round((pts.length ? pts[pts.length - 1].t - pts[0].t : 0) / DAY);
       // signal agreement: only for strategies that can be promoted
       if (!s.benchmarkOnly && !s.researchOnly && !s.external) {
@@ -86,13 +87,13 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
     let promoted = p?.promoted_t || null;
     if (ev.stage === 'live_candidate' && p?.stage !== 'live_candidate') {
       promoted = run?.last_t || now;
-      stmts.push(eventStmt(env.DB, { t: now, kind: 'promote', strategy_id: s.id, message: `🎉 ${s.name}: '실거래 가능(소액)' 단계 도달. 자동 주문은 하지 않으며, 사람이 검토 후 결정합니다.` }));
+      stmts.push(eventStmt(env.DB, { t: now, kind: 'promote', strategy_id: s.id, message: `${s.name}: '운영 점검 통과(실력 증명 아님)' 단계 도달 — 모의 장부가 백테스트대로 돌아가는 것만 확인됨. 자동 주문은 하지 않습니다.` }));
       stmts.push(env.DB.prepare("INSERT INTO live_budgets (strategy_id, frac, budget_krw, step, status, note, updated_at) VALUES (?, 0, ?, 0, 'eligible', ?, ?) ON CONFLICT(strategy_id) DO UPDATE SET status = 'eligible', budget_krw = excluded.budget_krw, updated_at = excluded.updated_at")
         .bind(s.id, gates.live.budgetKrw[s.market], '미래 실거래 모듈용 예산 기록(현재 주문 기능 없음)', now));
     }
     if (kill?.kill) {
       paperSince = run?.last_t || now; promoted = null;
-      stmts.push(eventStmt(env.DB, { t: now, kind: 'kill', strategy_id: s.id, message: `⛔ ${s.name}: ${kill.reason} → '실거래 가능' 해제, 모의 검증 다시 시작` }));
+      stmts.push(eventStmt(env.DB, { t: now, kind: 'kill', strategy_id: s.id, message: `⛔ ${s.name}: ${kill.reason} → '운영 점검 통과' 해제, 모의 검증 다시 시작` }));
       stmts.push(env.DB.prepare("UPDATE live_budgets SET status = 'killed', updated_at = ? WHERE strategy_id = ?").bind(now, s.id));
     } else if (ev.stage !== 'live_candidate') promoted = null;
     if (kill?.kill) killed.add(s.id);

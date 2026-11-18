@@ -7,7 +7,7 @@
 //   3) risk checks (max-drawdown halt, daily loss limit)
 //   4) strategy.decide() on data up to and including bar t -> risk layer -> new pending orders
 import { DAY } from './calendar.js';
-import { fillPrice, feesFor, affordableQty, roundQty } from './costs.js';
+import { fillPrice, feesFor, gainTaxFor, affordableQty, roundQty } from './costs.js';
 import { applyRisk, drawdown } from './risk.js';
 import { applyMarketGuard } from './market-guard.js';
 
@@ -75,8 +75,9 @@ function fillOrders(state, t, feed, opts, fills, events) {
       const gross = qty * price;
       // B11: below the exchange minimum the sell cannot execute; keep the dust position
       if (gross < costs.minOrderKrw) { events?.push({ t, kind: 'order_cancel', sym: o.sym, message: `최소 주문금액 미만 잔량이라 매도 불가 (${Math.round(gross)}원)` }); continue; }
-      const { fee, tax } = feesFor('SELL', gross, costs, m);
+      const { fee, tax: tax0 } = feesFor('SELL', gross, costs, m);
       const basis = pos.cost * (qty / pos.qty);
+      const tax = tax0 + gainTaxFor(t, gross - fee - tax0, basis, costs, m);
       const net = gross - fee - tax;
       const pnl = net - basis;
       state.cash += net;

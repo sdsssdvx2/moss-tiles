@@ -32,7 +32,7 @@ test('aiTask falls back to the next model and writes signals + audit', async () 
   const env = { DB, AI, AI_MODEL: 'm1', AI_FALLBACK_MODELS: 'm2' };
   const kv = {};
   assert.equal(await aiTask(env, kv, 1_800_000_000), true);
-  assert.deepEqual(calls, ['m1', 'm2']);
+  assert.deepEqual(calls, ['m1', 'm2', 'm2']); // 2nd same-prompt sample on the model that answered (consistency)
   const sig = DB.raw.prepare("SELECT sym, kind, value FROM signals ORDER BY sym").all();
   assert.ok(sig.some((r) => r.sym === 'KRW-BTC' && r.kind === 'ai_score' && r.value === -0.4));
   assert.ok(sig.some((r) => r.sym === '*crypto' && r.kind === 'news_veto' && r.value === 0.5));

@@ -21,10 +21,47 @@ function mergeCov(cov, sym, bars) {
   cov[sym] = c;
 }
 
+/**
+ * 자료 이상치 점검(2026-11-18): 국내 1배 ETF가 하루 ±15%, 개별주가 ±30%(가격제한폭) 넘게 움직이면 경고.
+ * 비공식(네이버) 자료면 KRX 공식 종가(etf_bydd_trd → signals 'etf_nav'.note.c)와 대조한다. 자료를 고치지는 않는다:
+ * 2026-07-31 KODEX 200TR +22.1%는 KRX 공식 종가 38,810원 = 네이버 38,810원, NAV +20%로 실제 시세였다.
+ * Pure part: returns null or {ret, limit}.
+ */
+export function jumpCheck(prevClose, bar, { etf = false } = {}) {
+  if (!(prevClose > 0) || !(bar?.c > 0)) return null;
+  const ret = bar.c / prevClose - 1, limit = etf ? 0.15 : 0.30;
+  return Math.abs(ret) > limit ? { ret, limit } : null;
+}
+async function jumpEvents(env, kv, sym, bars, src) {
+  const recent = Date.now() / 1000 - 10 * DAY; // only fresh bars (backfills of old history would spam)
+  if (!bars.length || bars[bars.length - 1].t < recent) return [];
+  const prev = await env.DB.prepare("SELECT c FROM candles WHERE market = 'krx' AND tf = '1d' AND sym = ? AND t < ? ORDER BY t DESC LIMIT 1").bind(sym, bars[0].t).first();
+  const out = [];
+  let pc = prev?.c;
+  for (const b of bars) {
+    const j = b.t >= recent && jumpCheck(pc, b, { etf: !!krxMeta[sym]?.etf });
+    pc = b.c;
+    const key = `jump:${sym}:${b.t}`;
+    if (!j || kv[key]) continue;
+    kv[key] = 1;
+    let check = src === 'krx' ? 'KRX 공식 자료 기준 → 실제 급변으로 봄' : 'KRX 공식 종가와 대조 필요';
+    if (src !== 'krx') {
+      const nav = await env.DB.prepare("SELECT note FROM signals WHERE kind = 'etf_nav' AND sym = ? AND t = ?").bind(sym, b.t).first().catch(() => null);
+      let oc = null; try { oc = JSON.parse(nav?.note || 'null')?.c; } catch (_) {}
+      if (oc > 0) check = Math.abs(oc / b.c - 1) < 0.005 ? `KRX 공식 종가(${oc.toLocaleString('ko-KR')}원)와 일치 → 실제 시세` : `⚠️ KRX 공식 종가 ${oc.toLocaleString('ko-KR')}원과 다름 → 자료 오류 가능`;
+    }
+    const d = new Date(b.t * 1000).toISOString().slice(0, 10);
+    out.push(kvSetStmt(env.DB, key, 1), env.DB.prepare('INSERT INTO events (t, kind, strategy_id, message, notified) VALUES (?,?,?,?,0)')
+      .bind(Math.floor(Date.now() / 1000), 'data_warn', null, `[자료 점검] ${krxMeta[sym]?.name || sym} ${d} 하루 ${(j.ret * 100).toFixed(1)}% (기준 ±${Math.round(j.limit * 100)}%, 출처 ${src}): ${check}`));
+  }
+  return out;
+}
+
 /** Write bars + updated coverage atomically (one D1 batch = one query). */
 async function store(env, kv, market, tf, sym, bars, src, extra = []) {
   const cov = kv[covKey(market, tf)] || (kv[covKey(market, tf)] = {});
   mergeCov(cov, sym, bars);
+  if (market === 'krx' && tf === '1d') { try { extra = [...extra, ...(await jumpEvents(env, kv, sym, bars, src))]; } catch (_) {} }
   const stmts = [...candleStmts(env.DB, market, tf, sym, bars, src), kvSetStmt(env.DB, covKey(market, tf), cov), ...extra];
   for (let i = 0; i < stmts.length; i += 500) await env.DB.batch(stmts.slice(i, i + 500));
 }

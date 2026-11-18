@@ -28,7 +28,7 @@ function positionsOf(state) {
 }
 
 // kv keys the overview needs (everything else in kv — cursors, backfill state, research trials — is skipped).
-const OVERVIEW_KV = ['variants', 'crypto:universe', 'sleeve:aggressive:stopped', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'cov:krx:1d', 'cov:crypto:1d', 'cov:crypto:1h', 'research:lastImport', 'research:lastError', 'research:checkedAt'];
+const OVERVIEW_KV = ['ai:consistency', 'research:leverage', 'variants', 'crypto:universe', 'sleeve:aggressive:stopped', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'cov:krx:1d', 'cov:crypto:1d', 'cov:crypto:1h', 'research:lastImport', 'research:lastError', 'research:checkedAt'];
 const parseKv = (rows) => { const o = {}; for (const r of rows) { try { o[r.k] = JSON.parse(r.v); } catch { o[r.k] = r.v; } } return o; };
 const btFromRow = (r) => ({ ...r, summary: JSON.parse(r.summary) });
 
@@ -39,7 +39,7 @@ const btFromRow = (r) => ({ ...r, summary: JSON.parse(r.summary) });
 export async function overview(env, now = Math.floor(Date.now() / 1000)) {
   const db = env.DB;
   const kvIn = OVERVIEW_KV.map(() => '?').join(',');
-  const [rRuns, rLc, rBt, rKv, rFills, rHealth, rEvents, rAlloc, rFeeds, rAi, rFg] = await db.batch([
+  const [rRuns, rLc, rBt, rKv, rFills, rHealth, rEvents, rAlloc, rFeeds, rAi, rFg, rReb] = await db.batch([
     db.prepare("SELECT id, strategy_id, mode, state, start_after, last_t FROM runs WHERE mode = 'paper'"),
     db.prepare('SELECT strategy_id, stage, label, summary, checks, paper_since, promoted_t FROM lifecycle'),
     db.prepare("SELECT strategy_id, kind, source, summary FROM backtests WHERE kind IN ('wf', 'worker')"),
@@ -51,7 +51,9 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
     db.prepare('SELECT source, COUNT(*) AS n, MAX(t) AS last FROM feed_items WHERE t >= ? GROUP BY source').bind(now - 3 * DAY),
     db.prepare('SELECT t, model, ok, note FROM ai_audit ORDER BY id DESC LIMIT 5'),
     db.prepare("SELECT t, payload FROM feed_items WHERE source = 'fear_greed' ORDER BY t DESC LIMIT 1"),
+    db.prepare("SELECT run_id, COUNT(DISTINCT t) AS n FROM fills WHERE run_id LIKE '%:paper' GROUP BY run_id"),
   ]);
+  const rebal = Object.fromEntries(rReb.results.map((r) => [r.run_id, r.n]));
   const runs = rRuns.results.map((r) => ({ ...r, state: JSON.parse(r.state) }));
   const lc = Object.fromEntries(rLc.results.map((r) => [r.strategy_id, { ...r, checks: JSON.parse(r.checks) }]));
   const bts = rBt.results.map(btFromRow);
@@ -63,7 +65,7 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
   // label), so `t % 86400 = 0` keeps every daily point and one point per day for hourly runs.
   const curves = {};
   if (runs.length) {
-    const { results } = await db.prepare("SELECT run_id, t, equity, bench FROM equity WHERE run_id LIKE '%:paper' AND (t % 86400) = 0 ORDER BY run_id, t").all();
+    const { results } = await db.prepare("SELECT run_id, t, equity, bench, invested FROM equity WHERE run_id LIKE '%:paper' AND (t % 86400) = 0 ORDER BY run_id, t").all();
     for (const p of results) (curves[p.run_id] ||= []).push(p);
   }
   const strategies = [];
@@ -73,8 +75,9 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
     const l = lc[s.id];
     let curve = [];
     if (run) curve = downsample(curves[run.id] || [], 120).map((p) => ({ t: p.t, e: Math.round(p.equity), b: Math.round(p.bench) }));
+    const fresh = run ? freshStats(curves[run.id] || [], run.state, rebal[run.id] || 0) : null;
     const st = run?.state;
-    const bt = btEvidence(bts, s.id);
+    const bt = btEvidence(bts, s.id, s);
     const risk = mergeRisk(s.risk);
     strategies.push({
       id: s.id, name: s.name, market: s.market, timeframe: s.timeframe, description: s.description, family: s.family, version: s.version,
@@ -87,10 +90,10 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
         cash: Math.round(st.cash), dd: r4(st.peak > 0 ? 1 - st.equity / st.peak : 0), fills: st.fills, halted: !!st.halted, haltReason: st.haltReason,
         startT: st.startT, lastT: run.last_t, startAfter: run.start_after, fees: Math.round((st.fees || 0) + (st.taxes || 0)), liquidations: st.liquidations || 0,
       } : null,
-      curve, positions: st ? positionsOf(st) : [],
+      curve, fresh, positions: st ? positionsOf(st) : [], leverageCompare: s.leverageCompare || (s.id === 'btc_perp_sim_v1' ? 2 : null), aiSolo: !!s.aiSolo, noBacktest: !!s.noBacktest,
       pending: (st?.kind === 'futures' ? (st.pending ? [st.pending] : []) : st?.pending || []).map((o) => ({ sym: o.sym, side: o.side, qty: o.qty, reason: o.reason })),
       recent: fills.filter((f) => f.run_id === `${s.id}:paper`).slice(0, 8).map(({ run_id, ...f }) => ({ ...f, name: symName(f.sym) })),
-      bt: bt ? { holdout: bt.holdout || null, holdout2x: bt.holdout2x || null, wf: bt.wf || null, years: bt.years, dsr: bt.dsr, trials: bt.trials, totalTrades: bt.totalTrades, source: bt.source || 'local', range: bt.range || null } : null,
+      bt: bt ? { holdout: bt.holdout || null, holdout2x: bt.holdout2x || null, wf: bt.wf || null, years: bt.years, dsr: bt.dsr, trials: bt.trials, totalTrades: bt.totalTrades, source: bt.source || 'local', range: bt.range || null, labTrials: bt.labTrials ?? null, dsrLab: bt.dsrLab ?? null, luckSharpe: bt.luckSharpe ?? null } : null,
       risk: { maxPositionWeight: risk.maxPositionWeight, minCash: risk.minCash, dailyLossLimit: risk.dailyLossLimit, weeklyLossLimit: risk.weeklyLossLimit, maxDrawdownHalt: risk.maxDrawdownHalt },
       universe: universeFor(s, kv).map((x) => ({ sym: x, name: symName(x) })),
     });
@@ -99,8 +102,17 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
   const cov = (m, tf) => { const c = kv[`cov:${m}:${tf}`] || {}; const v = Object.values(c); return { symbols: v.length, from: v.length ? Math.min(...v.map((x) => x.min)) : null, to: v.length ? Math.max(...v.map((x) => x.max)) : null }; };
   const sl = strategies.filter((x) => x.sleeve === 'aggressive' && x.paper);
   const slInit = sl.reduce((a, x) => a + x.paper.initial, 0), slEq = sl.reduce((a, x) => a + x.paper.equity, 0);
+  const labBt = bts.map((r) => r.summary).filter((x) => x?.labTrials).sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0))[0];
   return {
-    now, paperOnly: true, liveOrders: false, version: '2.0.0',
+    now, paperOnly: true, liveOrders: false, version: '2.1.0',
+    honesty: {
+      freshFrom: Math.min(...runs.map((r) => r.state?.startT).filter(Boolean)) || null,
+      labTrials: labBt?.labTrials ?? null, luckSharpe: labBt?.luckSharpe ?? null,
+      note: '과거 검증(보존 구간 포함)은 설계자가 이미 지나간 시기라 완전히 처음 보는 자료가 아님. 모의 기록만 진짜 처음 보는 자료.',
+    },
+    aiCompare: aiCompare(strategies, curves, byRun),
+    aiConsistency: kv['ai:consistency'] ? { n: kv['ai:consistency'].n, meanAbsDiff: kv['ai:consistency'].meanAbsDiff, signAgree: kv['ai:consistency'].signAgree, vetoAgree: kv['ai:consistency'].vetoAgree, at: kv['ai:consistency'].at } : null,
+    leverage: kv['research:leverage'] || null,
     sleeve: { ret: slInit ? slEq / slInit - 1 : null, stopped: kv['sleeve:aggressive:stopped'] || null, ...(gates.live.sleeves?.aggressive || {}) },
     market: { krxOpen: krxSessionOpen(now) },
     strategies,
@@ -121,6 +133,41 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
     assumptions: { krxCommission: DEFAULT_COSTS.krx.commission, krxSellTaxStock: DEFAULT_COSTS.krx.sellTaxStock, krxSellTaxEtf: DEFAULT_COSTS.krx.sellTaxEtf, etfTaxNote: 'ETF 매도세는 출처마다 설명이 달라 "면제(0%)"로 가정함. 설정으로 바꿀 수 있음.', upbitFee: DEFAULT_COSTS.crypto.commission, upbitMinOrder: DEFAULT_COSTS.crypto.minOrderKrw, slippage: { krx: DEFAULT_COSTS.krx.slippage, crypto: DEFAULT_COSTS.crypto.slippage } },
     gates,
   };
+}
+
+/**
+ * 처음 보는 자료(모의 장부 시작 이후) 요약. 같은 투자비율 기준 = 장부의 평균 투자 비율만큼만 기준 지수를 들고
+ * 나머지는 현금(0%)인 고정 비율(일별 근사). 짧은 기간이라 실력 판단 근거가 아님(화면에도 그렇게 표시).
+ */
+export function freshStats(points, state, rebalances = 0) {
+  if (!state) return null;
+  const init = state.initialCash || 1;
+  const pts = points || [];
+  const exp = pts.length ? pts.reduce((a, p) => a + (p.equity > 0 ? Math.min(1, (p.invested || 0) / p.equity) : 0), 0) / pts.length : 0;
+  let rm = 1;
+  for (let i = 1; i < pts.length; i++) if (pts[i - 1].bench > 0) rm *= 1 + exp * (pts[i].bench / pts[i - 1].bench - 1);
+  if (pts.length && pts[0].bench > 0) rm *= 1 + exp * (pts[0].bench / init - 1);
+  return { from: state.startT || null, days: pts.length, ret: r4(state.equity / init - 1), benchRet: r4(state.bench / init - 1), rmRet: r4(rm - 1), exposure: r4(exp), rebalances };
+}
+
+/** AI 공정 비교: 같은 시장의 규칙 / 규칙+AI 비중 / 규칙+뉴스 거부권 / AI 단독 장부를 "모두 기록이 있는 공통 기간"에서 비교. */
+export const AI_GROUPS = [
+  { market: 'krx', label: 'ETF (A 규칙 기준)', ids: ['etf_trend_v1', 'etf_trend_ai_v1', 'etf_trend_veto_v1', 'ai_solo_etf_v1'] },
+  { market: 'crypto', label: '비트·이더 (C 규칙 기준)', ids: ['crypto_trend_v1', 'crypto_trend_ai_v1', 'crypto_trend_veto_v1', 'ai_solo_crypto_v1'] },
+];
+export function aiCompare(strategies, curves, byRun) {
+  return AI_GROUPS.map((g) => {
+    const rows = g.ids.map((id) => ({ id, s: strategies.find((x) => x.id === id), c: curves[`${id}:paper`] || [] })).filter((x) => x.s && x.c.length);
+    if (!rows.length) return { ...g, from: null, rows: [] };
+    const from = Math.max(...rows.map((x) => x.c[0].t));
+    return { ...g, from, rows: rows.map((x) => {
+      const c = x.c.filter((p) => p.t >= from);
+      if (!c.length) return { id: x.id, name: x.s.name, days: 0 };
+      let peak = -Infinity, mdd = 0;
+      for (const p of c) { peak = Math.max(peak, p.equity); mdd = Math.max(mdd, 1 - p.equity / peak); }
+      return { id: x.id, name: x.s.name, days: c.length, ret: r4(c[c.length - 1].equity / c[0].equity - 1), mdd: r4(mdd), fills: byRun[`${x.id}:paper`]?.state?.fills ?? 0 };
+    }) };
+  });
 }
 
 /** Read-only export of latest target positions for a FUTURE external executor (e.g. Oracle VM). */
