@@ -10,6 +10,7 @@ import { DAY } from './calendar.js';
 import { fillPrice, feesFor, gainTaxFor, affordableQty, roundQty } from './costs.js';
 import { applyRisk, drawdown } from './risk.js';
 import { applyMarketGuard } from './market-guard.js';
+import { CASH_LIKE } from '../config.js';
 
 export class Feed {
   /** @param {Record<string, Array<{t:number,o:number,h:number,l:number,c:number,v:number}>>} series ascending by t */
@@ -109,9 +110,10 @@ function mark(state, t, feed, opts) {
   // B12: value held positions too (a symbol can leave the universe while still held)
   for (const sym of new Set([...opts.universe, ...Object.keys(state.pos)])) { const b = feed.last(sym); if (b) state.lastPx[sym] = b.c; }
   if (opts.benchSym) { const b = feed.last(opts.benchSym); if (b) state.lastPx[opts.benchSym] = b.c; }
-  let inv = 0;
-  for (const [sym, p] of Object.entries(state.pos)) inv += p.qty * (state.lastPx[sym] || 0);
+  let inv = 0, risky = 0;
+  for (const [sym, p] of Object.entries(state.pos)) { const v = p.qty * (state.lastPx[sym] || 0); inv += v; if (!CASH_LIKE.has(sym)) risky += v; }
   state.equity = state.cash + inv;
+  state.risky = risky; // invested minus cash substitutes (단기채권): used only by the risk-matched baseline
   state.peak = Math.max(state.peak, state.equity);
   if (opts.benchSym && state.lastPx[opts.benchSym]) {
     if (state.benchStart == null) state.benchStart = state.lastPx[opts.benchSym];
@@ -161,7 +163,7 @@ export function stepBar(state, t, feed, opts) {
     events.push({ t, kind: 'halt', message: state.haltReason });
   }
 
-  const point = { t, equity: r2(state.equity), cash: r2(state.cash), invested: r2(invested), bench: r2(state.bench) };
+  const point = { t, equity: r2(state.equity), cash: r2(state.cash), invested: r2(invested), risky: r2(state.risky ?? invested), bench: r2(state.bench) };
   if (state.halted) { state.lastT = t; return { state, fills, events, point }; }
 
   const dailyRet = state.dayStartEquity > 0 ? state.equity / state.dayStartEquity - 1 : 0;

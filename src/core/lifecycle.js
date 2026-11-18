@@ -104,7 +104,7 @@ export function evaluateStage({ strategy, bt, paper, kill, gates = GATE_DEFAULTS
     checks.push({ group: '백테스트', ok: ho.sharpe >= g.minSharpe && ho.sharpe >= (b.sharpe ?? 0) + g.sharpeVsBench, text: `샤프 ${n1(ho.sharpe)} (≥ ${g.minSharpe}, 기준선 ${n1(b.sharpe ?? 0)} - 0.1 이상)` });
     if (g.mustBeatBenchmarkReturn) checks.push({ group: '백테스트', ok: ho.totalReturn > (b.totalReturn ?? 0), text: `수익 ${pct(ho.totalReturn)} vs 기준선 ${pct(b.totalReturn ?? 0)}` });
     const rm = ho.riskMatched;
-    if (g.mustBeatRiskMatched && rm && !strategy.noRiskMatched) checks.push({ group: '백테스트', ok: ho.sharpe >= rm.sharpe + g.riskMatchedSharpeMargin - 1e-9, text: `위험 맞춤 기준선(지수 ${Math.round(rm.weight * 100)}% + 나머지 ${rm.cash === 'bond' ? '단기채권' : '현금'}, 매월 조정)보다 샤프가 같거나 높음: ${n1(ho.sharpe)} vs ${n1(rm.sharpe)} (수익 ${pct(ho.totalReturn)} vs ${pct(rm.totalReturn)}, 낙폭 ${pctAbs(ho.mdd)} vs ${pctAbs(rm.mdd)})` });
+    if (g.mustBeatRiskMatched && rm && !strategy.noRiskMatched) checks.push({ group: '백테스트', ok: ho.sharpe >= rm.sharpe + g.riskMatchedSharpeMargin - 1e-9, text: `위험 맞춤 기준선(${rm.n > 1 ? `같은 종목 ${rm.n}개를 똑같이 나눠 ` : '지수 '}${Math.round(rm.weight * 100)}% + 나머지 ${rm.cash === 'bond' ? '단기채권' : '현금'}, 매월 조정)보다 샤프가 같거나 높음: ${n1(ho.sharpe)} vs ${n1(rm.sharpe)} (수익 ${pct(ho.totalReturn)} vs ${pct(rm.totalReturn)}, 낙폭 ${pctAbs(ho.mdd)} vs ${pctAbs(rm.mdd)})` });
     if (bt.dsr != null) checks.push({ group: '백테스트', ok: bt.dsr >= g.minDeflatedSharpe, text: `시도 ${bt.trials || 1}번을 감안한 실력 확률 ${Math.round(bt.dsr * 100)}% (≥ ${Math.round(g.minDeflatedSharpe * 100)}%)` });
   }
   const pg = gates.paper;

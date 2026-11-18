@@ -216,3 +216,14 @@ test('AI task writes two audit rows and a consistency record when both samples p
   assert.ok(Math.abs(sig.value - 0.3) < 1e-9);
   assert.equal(kv['ai:consistency'].n, 1);
 });
+
+test('risk-matched baseline splits the index part equally over several symbols and ignores bond holdings as exposure', () => {
+  const a = makeBars({ n: 120, seed: 8 }), b = makeBars({ n: 120, seed: 9 });
+  const ts = a.map((x) => x.t);
+  const two = fixedMixCurve(ts, [a, b], null, 1, 100);
+  const first = two[0].equity, end = two[two.length - 1].equity;
+  assert.ok(end > 0 && Math.abs(first - 100) < 1e-9);
+  const pts = ts.map((t) => ({ t, equity: 100, invested: 60, risky: 30 })); // 30% in index, 30% in 단기채권
+  assert.equal(riskMatched(pts, [a, b], null).weight, 0.3);
+  assert.equal(riskMatched(pts, [a, b], null).n, 2);
+});

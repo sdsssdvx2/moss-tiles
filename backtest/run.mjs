@@ -196,9 +196,12 @@ export function evaluateStrategy(s, data, { params: forced, extraTrials = 0 } = 
   // 위험 맞춤 기준선: 평균 투자 비율만큼 지수 + 나머지 단기채권(코인은 현금), 매월 조정 (lifecycle G1 검사)
   const bond = s.market === 'krx' ? (data.krx['153130'] || null) : null;
   const opt = { market: s.market, tf: s.timeframe };
-  if (s.benchSym && series[s.benchSym]) {
-    ho.metrics.riskMatched = riskMatched(ho.points, series[s.benchSym], bond, opt);
-    all.metrics.riskMatched = riskMatched(all.points, series[s.benchSym], bond, opt);
+  // index part = the strategy's own risky universe, equal weight (e.g. KODEX 200TR + 미국S&P500TR), else its benchmark
+  const riskySyms = (s.universe || []).filter((x) => x !== '153130' && series[x]?.length);
+  const idx = riskySyms.length ? riskySyms.map((x) => series[x]) : (s.benchSym && series[s.benchSym] ? [series[s.benchSym]] : []);
+  if (idx.length) {
+    ho.metrics.riskMatched = riskMatched(ho.points, idx, bond, opt);
+    all.metrics.riskMatched = riskMatched(all.points, idx, bond, opt);
   }
   const labTrials = Math.max(trials, LAB_TRIALS);
   const dsrLab = deflatedSharpe(hoRet, labTrials);
