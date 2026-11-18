@@ -116,6 +116,20 @@ function pace(){const S=DATA.strategies.filter(s=>s.paper&&!s.benchmarkOnly&&s.s
   const days=m=>Math.max(0,...S.filter(s=>s.market===m&&s.timeframe==='1d').map(s=>(s.curve||[]).length));
   const idle=S.filter(s=>!(s.positions||[]).some(p=>p.sym!=='153130')).length;
   return '<div class="notice"><b>왜 숫자가 잘 안 바뀌나요?</b> 모의투자 시작 후 국내 '+days('krx')+'거래일 · 코인 '+days('crypto')+'일째입니다. 국내 일봉은 <b>다음 날 아침 8:40 무렵</b> 반영되고, ETF 추세 전략은 <b>매주 마지막 거래일에만</b> 판단합니다. 지금은 '+S.length+'개 중 <b>'+idle+'개가 현금·단기채권만</b> 들고 있습니다(하락장에서는 사지 않는 규칙). 모의 검증 통과에는 최소 20거래일과 <b>실제 조정(체결이 난 날) 12회 이상</b>이 필요합니다(주 1회 판단 전략은 보통 몇 달).</div>'}
+function conclusionCard(){const D=DATA.decision;if(!D)return '<div class="card" style="border:2px solid var(--brand)"><div class="name" style="font-size:17px">결론을 계산하는 중이에요.</div><div class="meta">6시간 안에 첫 자동 결정이 나와요. 실제 돈은 연결되어 있지 않아요.</div></div>';
+  const ok=D.verdict==='ready';
+  let h='<div class="card" style="border:2px solid '+(ok?'var(--ok)':'var(--brand)')+'"><div class="meta">AI 연구실의 결론 · '+kst(D.at)+'</div><div class="name" style="font-size:19px;margin:4px 0 8px">'+esc(D.headline)+'</div>';
+  h+='<ul style="margin:0 0 8px 18px;padding:0">'+D.reasons.map(r=>'<li class="reason">'+esc(r)+'</li>').join('')+'</ul>';
+  h+='<div class="notice" style="font-weight:700">'+esc(D.connect.text)+'</div>';
+  if(!ok)h+='<div class="meta">다음 점검: '+esc(D.nextCheckText)+(D.earliestText?' · 빨라도 '+esc(D.earliestText)+'쯤':'')+' (시스템이 매주 다시 계산해요)</div>';
+  h+='<div class="meta">※ '+esc(D.disclaimer)+' 지금은 가상 돈으로만 시험 중이에요.</div>';
+  h+='<details style="margin-top:8px"><summary class="meta" style="cursor:pointer">자세히: 미리 정한 기준과 숫자</summary>';
+  h+='<h3>자동 결정 기준 (결과를 보기 전에 고정)</h3><ul class="checks">'+D.criteria.map(c=>'<li>· '+esc(c)+'</li>').join('')+'</ul><div class="meta">'+esc(D.leveragePolicy)+'</div>';
+  if(D.selected.length)h+='<h3>선발된 전략</h3>'+D.selected.map(x=>'<div class="reason"><b>'+esc(x.name)+'</b> · 시작 금액 '+won(x.startKrw)+' · '+x.leverage+'배 (낙폭 한도로 계산한 허용치 '+x.leverageCalc+'배, 원칙상 1배) — '+esc(x.why)+'</div>').join('');
+  h+='<h3>후보별 기준 통과 현황</h3>'+(D.candidates.length?D.candidates.map(c=>'<div style="margin:6px 0"><b style="font-size:13px">'+esc(c.name)+'</b> <span class="meta">'+c.passed+'/'+c.total+'</span><ul class="checks">'+c.checks.map(k=>'<li><span class="ck '+(k.ok?'ok':'no')+'">'+(k.ok?'✓':'✗')+'</span>'+esc(k.text)+'</li>').join('')+'</ul></div>').join(''):'<div class="empty">후보 없음</div>');
+  if(D.excluded.length)h+='<h3>선발 대상이 아닌 장부</h3><div class="meta">'+D.excluded.map(x=>esc(x.name)+' ('+esc(x.why)+')').join(' · ')+'</div>';
+  const L=DATA.decisionLog||[];h+='<h3>자동 결정 기록</h3>'+(L.length?L.map(c=>'<div class="reason">'+kst(c.t)+' · '+esc(c.text)+'</div>').join(''):'<div class="empty">아직 바뀐 결정이 없어요(선발 0개 유지).</div>');
+  return h+'</details></div>'}
 function freshCard(){const H=DATA.honesty||{};const S=DATA.strategies.filter(s=>s.fresh&&s.fresh.days>0&&s.stage!=='retired');if(!S.length)return '';
   const rows=[...S].sort((a,b)=>(b.benchmarkOnly?1:0)-(a.benchmarkOnly?1:0)||(b.fresh.ret-a.fresh.ret));
   const tr=s=>{const f=s.fresh;const vsRm=f.ret-f.rmRet;return '<tr><td>'+esc(s.name)+'<div class="meta">'+day(f.from)+'부터 '+f.days+(s.timeframe==='1h'||s.market==='crypto'?'일':'거래일')+' · 평균 투자 '+pabs(f.exposure,0)+'</div></td><td class="r num '+cls(f.ret)+'">'+pct(f.ret)+'</td><td class="r num">'+pct(f.benchRet)+'</td><td class="r num">'+pct(f.rmRet)+'<div class="meta '+cls(vsRm)+'">'+(Math.abs(vsRm)<0.0005?'같음':pct(vsRm)+'p')+'</div></td><td class="r num">'+f.rebalances+'회</td></tr>'};
@@ -132,7 +146,7 @@ function levCard(){const L=DATA.leverage;const live=DATA.strategies.filter(s=>s.
 function viewRank(){const sorted=[...DATA.strategies].sort((a,b)=>(STAGE_ORDER[a.stage]-STAGE_ORDER[b.stage])||((b.paper?.ret??-9)-(a.paper?.ret??-9)));
   const main=sorted.filter(s=>s.sleeve!=='aggressive'),agg=sorted.filter(s=>s.sleeve==='aggressive');
   const sl=DATA.sleeve||{};const sleeveHead='<div class="card" style="border:2px solid var(--bad)"><div class="row"><div class="grow"><div class="name">⚠️ 고위험(잃어도 되는 돈만) · 공격형 슬롯</div><div class="meta">슬롯 전체가 '+pabs(sl.maxTotalLoss??0.3,0)+' 잃으면 모두 멈추고 자동으로 다시 채우지 않습니다. 나중 실거래 한도 '+won(sl.budgetKrw)+'.</div></div><div class="num '+cls(sl.ret)+'" style="font-weight:800">'+pct(sl.ret)+'</div></div>'+(sl.stopped?'<div class="notice">⛔ '+esc(sl.stopped)+'</div>':'')+'</div>';
-  return marketBar()+freshCard()+hero()+'<div class="notice">모든 숫자는 <b>가상 돈</b>(전략마다 따로 1,000만 원, 가족 장부는 본인 10만·어머니 100만 원)으로 한 모의투자입니다. 실제 주문은 하지 않습니다. 카드를 누르면 자세한 내용(이유·보유·위험)이 보입니다.</div>'+pace()+aiCard()+main.map(stratCard).join('')+(agg.length?sleeveHead+agg.map(stratCard).join(''):'')+levCard()}
+  return conclusionCard()+marketBar()+freshCard()+hero()+'<div class="notice">모든 숫자는 <b>가상 돈</b>(전략마다 따로 1,000만 원, 가족 장부는 본인 10만·어머니 100만 원)으로 한 모의투자입니다. 실제 주문은 하지 않습니다. 카드를 누르면 자세한 내용(이유·보유·위험)이 보입니다.</div>'+pace()+aiCard()+main.map(stratCard).join('')+(agg.length?sleeveHead+agg.map(stratCard).join(''):'')+levCard()}
 function viewLife(){const col=(stages)=>DATA.strategies.filter(s=>stages.includes(s.stage));const chip=s=>'<span class="chip">'+esc(s.name)+'<small>'+esc(s.label)+(s.paper?' · '+pct(s.paper.ret):'')+'</small></span>';
   let h='<div class="card"><h3 style="margin-top:0">전략 수명주기</h3><div class="pipe"><div class="lane"><div class="step">1단계</div><h4>백테스트</h4>'+col(['backtest','bt_failed']).map(chip).join('')+'</div><div class="lane"><div class="step">2단계</div><h4>모의 검증</h4>'+col(['paper']).map(chip).join('')+'</div><div class="lane"><div class="step">3단계</div><h4>운영 점검 통과</h4>'+(col(['live_candidate']).map(chip).join('')||'<div class="empty">아직 없음</div>')+'</div></div>';
   h+='<div class="returnlane"><h4 style="margin:0 0 6px;font-size:12.5px">⛔ 중단 → 모의 복귀</h4>'+(col(['halted']).map(chip).join('')||'<div class="empty">없음</div>')+'</div>';

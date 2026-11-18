@@ -9,6 +9,8 @@ import { feedsTask } from './feeds.js';
 import { aiTask } from './ai.js';
 import { marketSignalsTask } from './market-signals.js';
 import { researchPullTask } from './research-pull.js';
+import { weeklyDue, weeklyText } from '../core/decision.js';
+import { kvSetStmt, eventStmt } from '../db/store.js';
 
 export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher = fetch } = {}) {
   const kv = await kvAll(env.DB);
@@ -42,6 +44,16 @@ export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher =
   if ((kv['lc:at'] || 0) < now - 6 * 3600) await run('lifecycle', () => lifecycleTask(env, kv, now));
   else if (changed.length) await run('lifecycle', () => lifecycleTask(env, kv, now, { only: changed }));
   else await run('allocate', () => allocateTask(env, kv, now));
+  await run('weekly', () => weeklyDecisionTask(env, kv, now));
   await run('notify', () => notifyPending(env, { fetcher, kv, now }));
   return log;
+}
+
+/** Monday 08:40 KST: one plain-language conclusion (no jargon) as a Telegram event. Cheap: kv only. */
+export async function weeklyDecisionTask(env, kv, now) {
+  const d = kv['decision:current'];
+  if (!d || !weeklyDue(now, kv['decision:weeklyAt'])) return false;
+  kv['decision:weeklyAt'] = now;
+  await env.DB.batch([kvSetStmt(env.DB, 'decision:weeklyAt', now), eventStmt(env.DB, { t: now, kind: 'decision_weekly', strategy_id: null, message: weeklyText(d) })]);
+  return true;
 }

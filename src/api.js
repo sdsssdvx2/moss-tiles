@@ -28,7 +28,7 @@ function positionsOf(state) {
 }
 
 // kv keys the overview needs (everything else in kv — cursors, backfill state, research trials — is skipped).
-const OVERVIEW_KV = ['ai:consistency', 'research:leverage', 'variants', 'crypto:universe', 'sleeve:aggressive:stopped', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'cov:krx:1d', 'cov:crypto:1d', 'cov:crypto:1h', 'research:lastImport', 'research:lastError', 'research:checkedAt'];
+const OVERVIEW_KV = ['decision:current', 'decision:log', 'ai:consistency', 'research:leverage', 'variants', 'crypto:universe', 'sleeve:aggressive:stopped', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'cov:krx:1d', 'cov:crypto:1d', 'cov:crypto:1h', 'research:lastImport', 'research:lastError', 'research:checkedAt'];
 const parseKv = (rows) => { const o = {}; for (const r of rows) { try { o[r.k] = JSON.parse(r.v); } catch { o[r.k] = r.v; } } return o; };
 const btFromRow = (r) => ({ ...r, summary: JSON.parse(r.summary) });
 
@@ -110,6 +110,8 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
       labTrials: labBt?.labTrials ?? null, luckSharpe: labBt?.luckSharpe ?? null,
       note: '과거 검증(보존 구간 포함)은 설계자가 이미 지나간 시기라 완전히 처음 보는 자료가 아님. 모의 기록만 진짜 처음 보는 자료.',
     },
+    decision: kv['decision:current'] || null,
+    decisionLog: (kv['decision:log'] || []).slice(-15).reverse(),
     aiCompare: aiCompare(strategies, curves, byRun),
     aiConsistency: kv['ai:consistency'] ? { n: kv['ai:consistency'].n, meanAbsDiff: kv['ai:consistency'].meanAbsDiff, signAgree: kv['ai:consistency'].signAgree, vetoAgree: kv['ai:consistency'].vetoAgree, at: kv['ai:consistency'].at } : null,
     leverage: kv['research:leverage'] || null,

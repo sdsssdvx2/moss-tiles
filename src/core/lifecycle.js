@@ -135,7 +135,7 @@ export function evaluateStage({ strategy, bt, paper, kill, gates = GATE_DEFAULTS
   else if (checks.filter((c) => c.group === '백테스트').some((c) => !c.ok)) { stage = 'bt_failed'; summary = '과거 검증 기준 미달. 모의 기록은 계속 쌓되 실거래 후보가 될 수 없음'; }
   else if (!paper || checks.filter((c) => c.group === '모의').some((c) => !c.ok)) { stage = 'paper'; summary = '과거 검증 통과. 지금은 가상 돈으로 실제 시장에서 "백테스트대로 돌아가는지" 확인 중'; }
   else if (strategy.researchOnly) { stage = 'paper'; summary = '연구용 전략(조사 보고서 4장: 개별주·알트코인·단타 금지, 또는 비교·시뮬레이션 장부)이라 운영 점검 대상에서 제외. 모의로만 계속 기록'; }
-  else if (strategy.sleeve === 'aggressive') { stage = 'live_candidate'; summary = '운영 점검 통과(실력 증명 아님): 모의 장부가 백테스트대로 돌아가는 것만 확인됨. 고위험 슬롯 한도 안에서만 사람이 검토할 수 있음 (자동 주문 없음)'; }
+  else if (strategy.sleeve === 'aggressive') { stage = 'live_candidate'; summary = '운영 점검 통과(실력 증명 아님): 모의 장부가 백테스트대로 돌아가는 것만 확인됨. 고위험 슬롯이라 원칙상 자동 선발 대상이 아님 (자동 주문 없음)'; }
   else { stage = 'live_candidate'; summary = '운영 점검 통과(실력 증명 아님): 과거 검증 기준 + 모의 장부가 백테스트와 똑같이 움직이는 것까지 확인. 수익 능력은 몇 달~몇 년의 처음 보는 자료로만 판단 가능 (이 프로그램은 자동 주문을 하지 않음)'; }
   return { stage, label: STAGES[stage].label, checks, summary };
 }

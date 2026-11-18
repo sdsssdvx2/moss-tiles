@@ -76,8 +76,11 @@ const pct = (x) => `${x >= 0 ? '+' : ''}${(Math.round(x * 1000) / 10).toFixed(1)
 export async function dailySummaryText(env, now, { settings = parseSettings(null), queued = [] } = {}) {
   const lc = await lifecycleAll(env.DB);
   const runs = Object.fromEntries((await getRuns(env.DB)).map((r) => [r.strategy_id + ':' + r.mode, r]));
+  const kv = await kvAll(env.DB);
+  const d = kv['decision:current'];
   const lines = [`📊 모의투자 하루 요약 (${ymd(now + 9 * 3600)})`, '※ 가상 돈입니다. 실제 주문은 하지 않습니다.', ''];
-  for (const s of allStrategies(await kvAll(env.DB))) {
+  if (d?.headline) lines.push(`📌 결론: ${d.headline}`, d.connect?.text || '', `(${d.disclaimer})`, '', '자세히(장부별 숫자, 읽지 않아도 됨):');
+  for (const s of allStrategies(kv)) {
     const r = runs[`${s.id}:paper`];
     const l = lc[s.id];
     if (!r) continue;

@@ -8,6 +8,7 @@ import { getRuns, lifecycleAll, lifecycleStmt, backtests, equityPoints, eventStm
 import { allStrategies } from '../strategies/index.js';
 import { advanceRun } from './paper.js';
 import { INITIAL_CASH } from '../config.js';
+import { decide, paperRiskMatched } from '../core/decision.js';
 
 export function gatesFrom(env) {
   try { return mergeGates(env.GATES_JSON ? JSON.parse(env.GATES_JSON) : {}); } catch { return mergeGates({}); }
@@ -47,6 +48,7 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
   const stmts = [];
   const killed = new Set();
   let replays = 0; // at most one signal-agreement replay per invocation (CPU budget)
+  const facts = []; // automatic decision inputs (full pass only)
   for (const s of allStrategies(kv)) {
     const p = prev[s.id];
     const run = runs[`${s.id}:paper`];
@@ -59,6 +61,7 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
       const fills = (await fillsOf(env.DB, run.id, paperSince || 0, 5000)).reverse();
       const m = computeMetrics(pts, fills, { market: s.market, tf: s.timeframe });
       paper = { ...m, bars: pts.length, decisions: pts.length, rebalances: new Set(fills.map((f) => f.t)).size, halted: run.state.halted, haltReason: run.state.haltReason };
+      Object.defineProperty(paper, '_pts', { value: pts, enumerable: false });
       if (s.timeframe === '1h') paper.days = Math.round((pts.length ? pts[pts.length - 1].t - pts[0].t : 0) / DAY);
       // signal agreement: only for strategies that can be promoted
       if (!s.benchmarkOnly && !s.researchOnly && !s.external) {
@@ -98,6 +101,12 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
     } else if (ev.stage !== 'live_candidate') promoted = null;
     if (kill?.kill) killed.add(s.id);
     rows.push({ id: s.id, strategy_id: s.id, family: s.family, version: s.version, stage: ev.stage, label: ev.label, summary: ev.summary, checks: ev.checks, paper_since: paperSince, promoted_t: promoted, btSharpe: bt?.holdout?.sharpe });
+    if (!only) {
+      facts.push({ id: s.id, name: s.name, market: s.market, cadence: s.cadence, benchmarkOnly: !!s.benchmarkOnly, researchOnly: !!s.researchOnly, simulationOnly: !!s.simulationOnly,
+        sleeve: s.sleeve || null, noBacktest: !!s.noBacktest, stage: ev.stage,
+        bt: bt ? { dsrLab: bt.dsrLab ?? null, sharpe: bt.holdout?.sharpe ?? null, mdd: bt.holdout?.mdd ?? null } : null,
+        paper: paper ? { startT: run.state.startT || null, days: paper.days, rebalances: paper.rebalances, ret: paper.totalReturn, rmRet: paperRiskMatched(paper._pts), mdd: paper.mdd, halted: !!paper.halted } : null });
+    }
   }
   // 공격형 슬롯: total sleeve loss -30% -> stop every sleeve strategy permanently (no auto refill).
   const sleeveCfg = gates.live.sleeves?.aggressive;
@@ -107,7 +116,7 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
     const eqNow = sleeveRuns.reduce((a, r) => a + r.state.equity, 0);
     const loss = 1 - eqNow / init;
     if (loss >= sleeveCfg.maxTotalLoss && !kv['sleeve:aggressive:stopped']) {
-      const reason = `공격형 슬롯 전체 손실 ${Math.round(loss * 1000) / 10}% (한도 ${Math.round(sleeveCfg.maxTotalLoss * 100)}%) → 슬롯 전체 정지. 자동으로 다시 채우지 않음(주인 확인 필요)`;
+      const reason = `공격형 슬롯 전체 손실 ${Math.round(loss * 1000) / 10}% (한도 ${Math.round(sleeveCfg.maxTotalLoss * 100)}%) → 슬롯 전체 정지. 자동으로 다시 채우지 않음(고위험 슬롯은 원칙상 기본 제외)`;
       kv['sleeve:aggressive:stopped'] = reason;
       stmts.push(kvSetStmt(env.DB, 'sleeve:aggressive:stopped', reason));
       stmts.push(eventStmt(env.DB, { t: now, kind: 'halt', strategy_id: null, message: `⛔ ${reason}` }));
@@ -130,6 +139,16 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
     if (!p || p.stage === r.stage || r.stage === 'live_candidate' || killed.has(r.id)) continue;
     const name = allStrategies(kv).find((x) => x.id === r.id)?.name || r.id;
     stmts.push(eventStmt(env.DB, { t: now, kind: 'stage', strategy_id: r.id, message: `${name}: ${STAGES[p.stage]?.label || p.stage} → ${r.label}` }));
+  }
+  // Automatic decision (which strategy / leverage / when to rest) by the pre-registered principles; changes are logged.
+  if (!only) {
+    // final stages (after supersession / sleeve stop) feed the decision
+    for (const f of facts) { const r = rows.find((x) => x.id === f.id); if (r) f.stage = r.stage; }
+    const d = decide(facts, { now, prev: kv['decision:current'] || null });
+    const log = [...(kv['decision:log'] || []), ...d.changes].slice(-40);
+    kv['decision:current'] = d; kv['decision:log'] = log;
+    stmts.push(kvSetStmt(env.DB, 'decision:current', d), kvSetStmt(env.DB, 'decision:log', log));
+    for (const c of d.changes) stmts.push(eventStmt(env.DB, { t: now, kind: 'decision', strategy_id: c.id, message: `🤖 자동 결정: ${c.text}` }));
   }
   for (const r of rows) stmts.push(lifecycleStmt(env.DB, r));
   stmts.push(kvSetStmt(env.DB, 'lc:at', now));
