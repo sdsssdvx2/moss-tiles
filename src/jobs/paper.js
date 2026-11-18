@@ -71,8 +71,9 @@ export async function paperTask(env, kv, now, { maxSteps = 2, strategies = allSt
   for (const { s, run, ready } of cands) {
     if (!run) {
       // forward-only: the paper ledger starts with the first bar AFTER it was created
-      newRuns.push(runUpsertStmt(env.DB, { id: `${s.id}:paper`, strategy_id: s.id, mode: 'paper', state: (s.createState || createState)(INITIAL_CASH), start_after: ready, last_t: null }));
-      newRuns.push(eventStmt(env.DB, { t: now, kind: 'start', strategy_id: s.id, message: `${s.name}: 가상 계좌 ${INITIAL_CASH.toLocaleString('ko-KR')}원으로 모의투자 시작` }));
+      const st0 = (s.createState || createState)(INITIAL_CASH);
+      newRuns.push(runUpsertStmt(env.DB, { id: `${s.id}:paper`, strategy_id: s.id, mode: 'paper', state: st0, start_after: ready, last_t: null }));
+      newRuns.push(eventStmt(env.DB, { t: now, kind: 'start', strategy_id: s.id, message: `${s.name}: 가상 계좌 ${Number(st0.initialCash).toLocaleString('ko-KR')}원으로 모의투자 시작` }));
       continue;
     }
     if (changed.length >= maxSteps) continue;
