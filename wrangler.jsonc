@@ -15,7 +15,8 @@
       "migrations_dir": "migrations"
     }
   ],
-  // Workers AI (free 10k neurons/day, no key). AI 판단 job: 4 runs/day × 2 same-prompt samples (consistency check).
+  // Workers AI (free 10k neurons/day, no key). AI 판단 job: 4 runs/day × (2 same-prompt samples + 1 cross-model sample).
+  // + 읽기 전용 Q&A 하루 최대 30회(≈100~160 neurons/회, 추정). 합계 추정 ≈ 2k + 최대 4.8k < 10k.
   // gpt-oss-120b = 31,818 neurons/M input + 68,182/M output → ≈120-150 neurons/call → ≈1.0-1.3k neurons/day.
   "ai": { "binding": "AI" },
   "triggers": {
@@ -35,6 +36,10 @@
     "AI_MODEL": "@cf/openai/gpt-oss-120b",
     "AI_FALLBACK_MODELS": "@cf/meta/llama-4-scout-17b-16e-instruct,@cf/zai-org/glm-4.7-flash",
     "AI_SAMPLES": "2",
+    // 다른 무료 모델 교차 판단: auto = 목록의 다음 모델 1회(엇갈린 종목은 점수 절반), off = 끔
+    "AI_CROSS_MODEL": "auto",
+    // 연구실에게 물어보기(읽기 전용 Q&A): 하루에 AI로 답하는 횟수 상한. 넘으면 AI 없이 저장된 기록으로 답함
+    "ASK_DAILY_MAX": "30",
     "LOG_TICKS": "false",
     // 코인 시장 신호 (위험 신호 전용). 기준값 바꾸기: MARKET_SIGNALS_JSON 예) {"premHold":0.06,"derivRules":false}
     "MARKET_SIGNALS_ENABLED": "true",

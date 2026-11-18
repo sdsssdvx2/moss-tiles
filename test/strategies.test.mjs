@@ -107,7 +107,9 @@ test('static safety: no live order capability anywhere in src/', () => {
     // 코인 시장 신호 (public, read-only market data; risk signals only)
     'api.bithumb.com', 'data-api.binance.vision', 'www.binance.com', 'api.exchange.coinbase.com', 'www.okx.com', 'open.er-api.com', 't.me', 'api.hyperliquid.xyz',
     // read-only news headline RSS (AI 판단 inputs)
-    'www.yna.co.kr', 'www.hankyung.com', 'www.blockmedia.co.kr', 'www.tokenpost.kr']);
+    'www.yna.co.kr', 'www.hankyung.com', 'www.blockmedia.co.kr', 'www.tokenpost.kr',
+    // 세계 지표·온체인(2026-11-18 밤, 공개·읽기 전용 시세/통계. 주문·계정 경로 없음)
+    'query1.finance.yahoo.com', 'api.frankfurter.dev', 'api.coingecko.com', 'api.blockchain.info']);
   for (const h of fetchHosts) assert.ok(allowed.has(h), `unexpected host ${h}`);
 });
 

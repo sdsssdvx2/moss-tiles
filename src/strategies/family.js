@@ -11,6 +11,8 @@
 import { sma } from '../core/indicators.js';
 import { createState } from '../core/engine.js';
 import { symName } from '../config.js';
+import { loadMembers } from '../core/members.js';
+import { PRINCIPLES } from '../core/principles.js';
 
 const SYMS = ['379800', '278530'];
 
@@ -32,7 +34,7 @@ export function familySignal(closes) {
   return ['SELL', score, `상승 추세 조건 미달(매수하지 않음), 60일 수익률 ${p(mom)}`];
 }
 
-function makeFamily({ id, who, cash, maxTotal, maxAsset, drawdown }) {
+export function makeFamily({ id, who, cash, maxTotal, maxAsset, drawdown }) {
   return {
     id, family: id.replace(/_v\d+$/, ''), version: 1, cadence: 'slow', priorTrials: 0, researchOnly: true,
     profile: who, initialCash: cash,
@@ -73,3 +75,24 @@ function makeFamily({ id, who, cash, maxTotal, maxAsset, drawdown }) {
 export const familySelfV1 = makeFamily({ id: 'family_self_v1', who: '본인', cash: 100_000, maxTotal: 0.35, maxAsset: 0.35, drawdown: 0.06 });
 export const familyMotherV1 = makeFamily({ id: 'family_mother_v1', who: '어머니', cash: 1_000_000, maxTotal: 0.25, maxAsset: 0.20, drawdown: 0.04 });
 export const FAMILY_STRATEGIES = [familySelfV1, familyMotherV1];
+
+/**
+ * 화면에서 바꾼 가족 구성원 설정(kv 'family:members', core/members.js)을 장부 목록에 반영한다.
+ *   - 처음 두 장부(family_self_v1·family_mother_v1)는 위의 고정 정의 그대로(이미 쌓인 기록과 재생이 같아야 하므로).
+ *   - 새로 생긴 장부(추가된 구성원, 금액·성향을 바꾼 뒤의 새 버전)는 같은 규칙에 금액·한도만 다른 장부로 만든다.
+ *   - 종료된 장부는 closed 표시(더 진행하지 않음, 기록 유지). 이름을 바꾸면 표시 이름만 바뀐다.
+ */
+export function memberStrategies(state) {
+  const base = Object.fromEntries(FAMILY_STRATEGIES.map((s) => [s.id, s]));
+  const st = loadMembers(state);
+  const out = [];
+  for (const m of st.members) for (const b of m.books) {
+    const prof = PRINCIPLES.memberProfiles[b.profile] || PRINCIPLES.memberProfiles.careful;
+    const s = base[b.id] || makeFamily({ id: b.id, who: m.label, cash: b.budgetKrw, maxTotal: prof.maxTotal, maxAsset: prof.maxAsset, drawdown: prof.drawdown });
+    out.push({ ...s, family: `family_${m.key}`, version: b.rev, profile: m.label, memberKey: m.key, memberBook: true, closed: b.to != null, closedAt: b.to ?? null,
+      name: `가족 장부(${m.label}): ${Math.round(b.budgetKrw / 10000).toLocaleString('ko-KR')}만 원 ETF 추세${b.to != null ? ' · 종료' : ''}` });
+  }
+  // 저장된 설정에 없는 고정 장부(있을 수 없지만 안전하게)는 그대로 둔다
+  for (const s of FAMILY_STRATEGIES) if (!out.some((x) => x.id === s.id)) out.push(s);
+  return out;
+}

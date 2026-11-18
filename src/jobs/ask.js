@@ -1,0 +1,162 @@
+// 연구실에게 물어보기 (읽기 전용 Q&A). 예: "왜 지금 안 사?", "기준이 뭐야?", "레버리지 왜 1배야?"
+//   - 답의 재료는 연구실이 이미 저장해 둔 사실뿐(자동 결정, 기준, 가족 구성원, AI 점수, 코인 시장 신호, AI 성적표).
+//   - 무료 Workers AI(판단 작업과 같은 모델 순서)가 쉬운 말로 풀어 준다. AI가 없거나 실패하면 규칙으로 만든 답을 준다(항상 답함).
+//   - 아무것도 바꾸지 못한다: 주문·설정 변경·전략 선발에 연결된 코드가 없다. 쓰는 것은 하루 사용량 카운터와 감사 기록뿐.
+//   - 투자 조언을 하지 않는다(무엇을 사라/팔라고 하지 않음). 답 끝에 항상 안내 문구를 붙인다.
+import { kvSetStmt } from '../db/store.js';
+import { aiConfigured, aiModels, textOf, AI_SYMBOLS } from './ai.js';
+import { criteriaView } from '../core/criteria.js';
+import { membersView } from '../core/members.js';
+import { DISCLAIMER } from '../core/decision.js';
+import { symName } from '../config.js';
+import { gatesFrom } from './lifecycle.js';
+
+export const ASK_MAX_CHARS = 300;
+export const ASK_DAILY_MAX_DEFAULT = 30; // 프롬프트 ≈ 2.5~3.5천 자. gpt-oss-120b 1회 ≈ 100~160 neurons(추정) → 하루 최대 ≈ 3~4.8k. 넘으면 AI 없이 기록으로만 답함.
+const KST = 9 * 3600;
+const dayK = (t) => new Date((t + KST) * 1000).toISOString().slice(0, 10);
+const p1 = (x) => (x == null ? '-' : `${x >= 0 ? '+' : ''}${(Math.round(x * 1000) / 10).toFixed(1)}%`);
+
+export function cleanQuestion(q) {
+  return String(q ?? '').replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, ASK_MAX_CHARS);
+}
+
+/** 답의 재료(사실 묶음). 모두 이미 저장된 값이고, 여기서 새로 계산·변경하는 것은 없다. */
+export async function askContext(env, kv, now) {
+  const d = kv['decision:current'] || null;
+  const c = criteriaView(gatesFrom(env));
+  const m = membersView(kv['family:members']);
+  let ai = [];
+  try {
+    const { results } = await env.DB.prepare(`SELECT sym, t, value, note FROM signals WHERE kind = 'ai_score' AND t >= ? ORDER BY t DESC LIMIT 12`).bind(now - 2 * 86400).all();
+    const seen = new Set();
+    for (const r of results) if (!seen.has(r.sym) && AI_SYMBOLS.includes(r.sym)) { seen.add(r.sym); ai.push({ sym: r.sym, name: symName(r.sym), score: r.value, why: r.note, t: r.t }); }
+  } catch (_) { ai = []; }
+  const g = kv['mkt:guard'] || null;
+  return {
+    now, decision: d, criteria: c, members: m, ai,
+    scorecard: kv['ai:scorecard'] || null,
+    guard: g ? { damp: g.damp || null, altHold: g.altHold || null } : null,
+    criteriaLog: (kv['criteria:log'] || []).slice(-5),
+  };
+}
+
+/** 프롬프트·규칙 답변이 함께 쓰는 사실 요약(쉬운 말, 짧게). */
+export function factLines(ctx) {
+  const d = ctx.decision, L = [];
+  if (d) {
+    L.push(`지금 결론: ${d.headline}`);
+    for (const r of d.reasons || []) L.push(`이유: ${r}`);
+    L.push(d.connect?.text || '');
+    if (d.verdict !== 'ready') L.push(`다음 점검: ${d.nextCheckText}${d.earliestText ? `, 빨라도 ${d.earliestText}쯤` : ''}`);
+    for (const k of ['safe', 'growth']) {
+      const b = d.books?.[k];
+      if (!b) continue;
+      L.push(`${b.label}: 기준 통과 ${b.passedCount}개${b.selected.length ? `, 뽑힌 전략 ${b.selected.map((x) => `${x.name}(배수 ${x.leverage}배)`).join(', ')}` : ''}${b.nearest ? `, 가장 가까운 후보 ${b.nearest.name} (기준 ${b.nearest.passed}/${b.nearest.total}개 통과, 실제로 사고판 날 ${b.nearest.rebalances}번, 가상 수익 ${p1(b.nearest.paperRet)})` : ''}`);
+    }
+    if (d.recommend) L.push(`장부 선택: ${d.recommend.text}`);
+    L.push(`적용 중인 기준 버전: v${d.criteriaVersion ?? ctx.criteria.version}`);
+  } else L.push('아직 첫 자동 결정이 나오지 않았어요(6시간 안에 나와요).');
+  L.push(`가족 구성원: ${ctx.members.members.map((x) => `${x.label} ${Math.round(x.budgetKrw / 10000)}만 원(${ctx.members.profiles[x.profile]?.label || x.profile})`).join(', ')}`);
+  if (ctx.ai.length) L.push(`AI의 최근 종목 점수(-1 나쁨 ~ +1 좋음): ${ctx.ai.map((a) => `${a.name} ${a.score.toFixed(2)}${a.why ? ` (${a.why})` : ''}`).join(' / ')}`);
+  const sc = ctx.scorecard;
+  if (sc?.n) L.push(`AI 성적표: 지난 판단 ${sc.n}개 중 방향이 맞은 비율 ${Math.round((sc.hit ?? 0) * 100)}% (${sc.horizonDays}일 뒤 실제 가격과 비교)${sc.note ? `, ${sc.note}` : ''}`);
+  if (ctx.guard?.damp) L.push(`코인 시장 신호: 새 매수 ${ctx.guard.damp.factor === 0 ? '보류' : `×${ctx.guard.damp.factor}`} 상태`);
+  return L.filter(Boolean);
+}
+
+const TOPICS = [
+  { key: 'buy', re: /왜.*(안\s*사|안\s*샀|매수.*안|사지\s*않)|언제.*(사|매수|시작|연결)|아직|기다/ },
+  { key: 'criteria', re: /기준|조건|규칙|어떻게.*(정|뽑|고르)|통과/ },
+  { key: 'leverage', re: /레버리지|배수|[0-9]\s*배|선물|공격|안전\s*장부|수익률.*낮|너무\s*낮/ },
+  { key: 'members', re: /구성원|가족|엄마|어머니|금액|예산|추가|삭제|빼/ },
+  { key: 'ai', re: /ai|인공지능|모델|점수|똑똑|학습|판단/i },
+  { key: 'change', re: /바뀌|변경|이력|버전/ },
+  { key: 'risk', re: /위험|손해|손실|잃|안전/ },
+  { key: 'real', re: /실제\s*돈|실거래|진짜|연결|주문/ },
+];
+
+/** AI 없이도 항상 줄 수 있는 답(사실 요약을 주제에 맞게 골라 이어 붙임). */
+export function ruleAnswer(q, ctx) {
+  const d = ctx.decision, c = ctx.criteria;
+  const hit = TOPICS.filter((t) => t.re.test(q)).map((t) => t.key);
+  const out = [];
+  const sec = (title) => c.plain.find((x) => x.title.startsWith(title))?.lines || [];
+  if (!hit.length || hit.includes('buy') || hit.includes('real')) {
+    if (d) {
+      out.push(d.headline, ...(d.reasons || []).map((r) => `· ${r}`), d.connect?.text || '');
+      if (d.verdict !== 'ready') out.push(`기준을 넘는 전략이 나오면 화면 맨 위 결론이 "연결해도 되는 단계"로 바뀌어요. 다음 점검은 ${d.nextCheckText}${d.earliestText ? ` (빨라도 ${d.earliestText}쯤)` : ''}예요.`);
+    } else out.push('아직 첫 자동 결정이 나오지 않았어요. 6시간 안에 나와요.');
+    out.push('가상 장부들은 각자 규칙대로 이미 사고팔고 있어요. "안 산다"는 것은 실제 돈을 아직 연결하지 않는다는 뜻이에요.');
+  }
+  if (hit.includes('criteria')) out.push(`지금 적용 중인 기준(v${c.version}):`, ...sec('전략이 뽑히려면').map((l) => `· ${l}`));
+  if (hit.includes('leverage')) {
+    out.push(...sec('안전 장부와 공격 장부').map((l) => `· ${l}`));
+    const g = d?.books?.growth;
+    if (g) out.push(`지금 공격 장부: 기준 통과 ${g.passedCount}개${g.nearest ? `, 가장 가까운 후보는 ${g.nearest.name} (가상 수익 ${p1(g.nearest.paperRet)})` : ''}.`);
+    if (d?.recommend) out.push(d.recommend.text);
+    out.push('1배로만 두는 것은 안전 장부예요. 배수를 올리면 버는 폭과 잃는 폭이 함께 커지고 실력은 늘지 않아서, 공격 장부는 가상 돈으로 따로 굴리며 숫자로 증명될 때만 권해요.');
+  }
+  if (hit.includes('members')) out.push(`지금 구성원: ${ctx.members.members.map((x) => `${x.label} ${Math.round(x.budgetKrw / 10000)}만 원`).join(', ')}.`, ...sec('가족 구성원과 금액').slice(0, 2).map((l) => `· ${l}`));
+  if (hit.includes('ai')) {
+    out.push('AI(무료 모델)는 6시간마다 가격 흐름·흔들림·시장 폭·뉴스 제목·세계 지표를 읽고 종목 점수를 매겨요. 점수는 비교용 가상 장부에만 쓰이고, 전략 선발은 위 기준(숫자)으로만 해요.');
+    if (ctx.ai.length) out.push(`최근 점수: ${ctx.ai.map((a) => `${a.name} ${a.score.toFixed(2)}`).join(', ')}.`);
+    const sc = ctx.scorecard;
+    out.push(sc?.n ? `AI 성적표: 지난 판단 ${sc.n}개 중 방향이 맞은 비율 ${Math.round((sc.hit ?? 0) * 100)}%. 이 성적을 다음 판단 때 AI에게 다시 알려 줘서 스스로 고치게 해요.` : 'AI 성적표는 판단 뒤 7일이 지나야 채점돼서, 아직 쌓이는 중이에요.');
+  }
+  if (hit.includes('change')) out.push(...sec('기준이 바뀌면').map((l) => `· ${l}`), ...(ctx.criteriaLog.length ? [`최근 변경: ${ctx.criteriaLog[ctx.criteriaLog.length - 1].text}`] : []));
+  if (hit.includes('risk') && !hit.includes('leverage')) out.push(`목표는 "${c.goal}"이에요.`, ...sec('안전 장부와 공격 장부').slice(0, 2).map((l) => `· ${l}`));
+  return out.filter(Boolean).join('\n');
+}
+
+export function askPrompt(q, ctx) {
+  return [
+    '너는 "모의투자 연구실"의 안내원이다. 사용자는 주식·코인을 전혀 모른다.',
+    '규칙: (1) 아래 "사실"에 있는 내용만으로 답한다. 없는 내용은 "그건 연구실 기록에 없어요"라고 한다. (2) 쉬운 한국어, 존댓말(~요), 3~6문장. 전문 용어를 쓰면 바로 풀어 쓴다.',
+    '(3) 무엇을 사라/팔라고 권하지 않는다. 수익을 약속하지 않는다. (4) 사용자에게 판단을 떠넘기지 않는다: 시스템이 무엇을 어떻게 정했는지 설명한다. (5) 너는 아무것도 바꿀 수 없다. 바꿔 달라는 요청에는 어느 화면(탭)에서 되는지만 알려 준다. (6) 모든 숫자는 가상 돈 기록이다.',
+    '', '사실:', ...factLines(ctx).map((l) => `- ${l}`),
+    '', '기준 설명:', ...ctx.criteria.plain.flatMap((s) => [`[${s.title}]`, ...s.lines.map((l) => `- ${l}`)]),
+    '', `질문: ${q}`,
+  ].join('\n').slice(0, 9000);
+}
+
+const stripThink = (t) => String(t || '').replace(/<think>[\s\S]*?<\/think>/g, '').replace(/```[a-z]*|```/g, '').trim();
+
+/** 질문 하나에 답한다. 반환 { answer, source: 'ai'|'rule', model, left }. */
+export async function ask(env, kv, question, now = Math.floor(Date.now() / 1000), { fetcher = fetch } = {}) {
+  const q = cleanQuestion(question);
+  if (q.length < 2) return { error: '질문을 적어 주세요.' };
+  const ctx = await askContext(env, kv, now);
+  const fallback = ruleAnswer(q, ctx);
+  const max = Math.max(0, Number(env.ASK_DAILY_MAX ?? ASK_DAILY_MAX_DEFAULT) | 0);
+  const quota = kv['ask:quota']?.day === dayK(now) ? kv['ask:quota'] : { day: dayK(now), n: 0 };
+  let answer = null, model = null, note = '';
+  if (aiConfigured(env) && quota.n < max) {
+    quota.n += 1;
+    const messages = [{ role: 'system', content: '쉬운 한국어로만 답한다. 마크다운 표·코드 금지.' }, { role: 'user', content: askPrompt(q, ctx) }];
+    if (env.AI_ENDPOINT && env.AI_API_KEY && env.AI_MODEL) {
+      try {
+        const res = await fetcher(`${String(env.AI_ENDPOINT).replace(/\/$/, '')}/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${env.AI_API_KEY}` }, body: JSON.stringify({ model: env.AI_MODEL, temperature: 0.2, messages }) });
+        if (res.ok) { answer = stripThink(textOf(await res.json().catch(() => null))); model = String(env.AI_MODEL); } else note = `HTTP_${res.status}`;
+      } catch (e) { note = String(e?.message || e).slice(0, 80); }
+    } else {
+      for (const m of aiModels(env)) {
+        try {
+          const out = await env.AI.run(m, { messages, temperature: 0.2, max_tokens: 1500, ...(m.includes('gpt-oss') ? { reasoning_effort: 'low' } : {}) });
+          const t = stripThink(textOf(out));
+          if (t && t.length >= 10) { answer = t; model = m; break; }
+          note += `${m.split('/').pop()}:EMPTY; `;
+        } catch (e) { note += `${m.split('/').pop()}:${String(e?.message || e).slice(0, 40)}; `; }
+      }
+    }
+  } else if (aiConfigured(env)) note = '오늘 AI 질문 한도를 다 써서 기록으로만 답해요';
+  const source = answer ? 'ai' : 'rule';
+  const text = `${(answer || fallback).slice(0, 1800)}\n\n※ ${DISCLAIMER} 모든 숫자는 가상 돈 기록이에요.`;
+  try {
+    await env.DB.batch([
+      kvSetStmt(env.DB, 'ask:quota', quota),
+      env.DB.prepare('INSERT INTO ai_audit (t, model, prompt, response, ok, note) VALUES (?,?,?,?,?,?)').bind(now, String(model || 'rule'), `[질문] ${q}`, text.slice(0, 4000), answer ? 1 : 0, `qa; ${note}`.slice(0, 200)),
+    ]);
+  } catch (_) { /* 기록 실패가 답을 막지 않게 */ }
+  return { answer: text, source, model: model ? model.split('/').pop() : null, left: Math.max(0, max - quota.n), note: source === 'rule' && note ? note.slice(0, 80) : undefined };
+}

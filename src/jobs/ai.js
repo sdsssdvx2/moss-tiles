@@ -10,6 +10,7 @@ import { DAY, HOUR } from '../core/calendar.js';
 import { symName, KRX_STOCKS, CRYPTO_CORE } from '../config.js';
 import { sma } from '../core/indicators.js';
 import { realizedVol } from '../strategies/common.js';
+import { scorecardTask, calibrationLines } from './ai-scorecard.js';
 
 export const AI_SYMBOLS = ['278530', '379800', 'KRW-BTC', 'KRW-ETH'];
 // Free-plan models verified 2026-11-16 (deepseek-v4.x needs Workers Paid → 5035). gpt-oss with low reasoning ≈ 22 neurons/call.
@@ -98,6 +99,16 @@ export async function marketContext(env, now, syms = AI_SYMBOLS) {
   return out;
 }
 
+/** 세계 지표·온체인 줄(최근 3일, 지표별 최신 하나). feeds 'macro'·'crypto_global'이 모은 것. */
+export async function worldLines(env, now) {
+  try {
+    const { results } = await env.DB.prepare("SELECT t, payload FROM feed_items WHERE type IN ('macro', 'onchain') AND t >= ? ORDER BY t DESC LIMIT 60").bind(now - 3 * DAY).all();
+    const seen = new Set(), out = [];
+    for (const r of results) { try { const p = JSON.parse(r.payload); if (!p.id || seen.has(p.id)) continue; seen.add(p.id); out.push(`- ${p.en || p.title}`); } catch { /* skip */ } }
+    return out.slice(0, 14);
+  } catch { return []; }
+}
+
 export function buildPrompt(items, syms = AI_SYMBOLS, ctx = null) {
   const lines = items.slice(0, 60).map((i) => `- [${i.sym}] ${i.type}: ${(() => { try { const p = JSON.parse(i.payload); return p.title || p.label || JSON.stringify(p).slice(0, 120); } catch { return ''; } })()}`);
   const f = ctx?.features || {};
@@ -116,6 +127,8 @@ export function buildPrompt(items, syms = AI_SYMBOLS, ctx = null) {
     `Symbols: ${syms.map((s) => `${s} (${symName(s)})`).join(', ')}`,
     'Price structure (daily closes, as of the last finished bar):', ...feat,
     'Market breadth:', ...br,
+    ...(ctx?.world?.length ? ['World macro / on-chain context (latest values, change over ~1 month where given):', ...ctx.world] : []),
+    ...(ctx?.calibration?.length ? ['', ...ctx.calibration, ''] : []),
     'News items (last 24h):', ...lines,
   ].join('\n');
 }
@@ -151,6 +164,22 @@ export function mergeSamples(a, b) {
   for (const [m, v] of Object.entries(b.veto)) veto[m] = Math.max(veto[m] ?? 0, v);
   return { scores, veto };
 }
+/**
+ * 교차 판단 반영: 다른 모델과 방향(−, 0, +)이 엇갈린 종목은 점수를 절반으로(확신 축소), 거부권은 더 보수적인 쪽.
+ * 방향이 같으면 그대로 둔다(주 모델의 점수를 유지 → 같은 모델 2회 평균의 뜻이 바뀌지 않음).
+ */
+export function crossShrink(main, other) {
+  if (!main || !other) return main;
+  const bucket = (x) => (x > 0.05 ? 1 : x < -0.05 ? -1 : 0);
+  const scores = {};
+  for (const [s, x] of Object.entries(main.scores)) {
+    const o = other.scores[s];
+    scores[s] = o && bucket(o.score) !== bucket(x.score) ? { ...x, score: Math.round((x.score / 2) * 1000) / 1000, reason: `${x.reason} · 다른 모델과 엇갈려 절반`.slice(0, 100) } : x;
+  }
+  const veto = { ...main.veto };
+  for (const [m, v] of Object.entries(other.veto)) veto[m] = Math.max(veto[m] ?? 0, v);
+  return { scores, veto };
+}
 /** Rolling consistency record kept in kv 'ai:consistency' (last 40 runs). */
 export function rollConsistency(prev, c, now) {
   const runs = [...(prev?.runs || []), { t: now, ...c }].slice(-40);
@@ -183,8 +212,12 @@ export async function aiTask(env, kv, now, { fetcher = fetch } = {}) {
   if (!aiConfigured(env)) return false;
   if ((kv['ai:at'] || 0) > now - AI_INTERVAL) return false;
   kv['ai:at'] = now;
-  const { results } = await env.DB.prepare('SELECT source, sym, type, payload FROM feed_items WHERE t >= ? ORDER BY t DESC LIMIT 60').bind(now - DAY).all();
-  const prompt = buildPrompt(results, AI_SYMBOLS, await marketContext(env, now));
+  const { results } = await env.DB.prepare("SELECT source, sym, type, payload FROM feed_items WHERE t >= ? AND type NOT IN ('macro', 'onchain') ORDER BY t DESC LIMIT 60").bind(now - DAY).all();
+  const mctx = await marketContext(env, now);
+  mctx.world = await worldLines(env, now);
+  // 자기 보정: 지난 판단을 실제 결과와 대조한 성적표를 프롬프트에 되돌려 준다(하루 한 번 다시 채점)
+  try { mctx.calibration = calibrationLines(await scorecardTask(env, kv, now, AI_SYMBOLS)); } catch (_) { mctx.calibration = []; }
+  const prompt = buildPrompt(results, AI_SYMBOLS, mctx);
   let text = null, note = '', model = aiModels(env)[0];
   try { ({ text, note, model } = await callModel(env, prompt, fetcher)); } catch (e) { note = String(e?.message || e).slice(0, 100); }
   const p1 = text ? parseAiResponse(text) : null;
@@ -196,11 +229,24 @@ export async function aiTask(env, kv, now, { fetcher = fetch } = {}) {
     try { ({ text: text2, note: note2 } = await callModel(env, prompt, fetcher, model)); } catch (e) { note2 = String(e?.message || e).slice(0, 100); }
     p2 = text2 ? parseAiResponse(text2) : null;
   }
-  const parsed = mergeSamples(p1, p2);
+  let parsed = mergeSamples(p1, p2);
   const cons = consistencyOf(p1, p2);
+  // 다른 무료 모델의 교차 판단(AI_CROSS_MODEL: 'auto' = 목록의 다음 모델, 'off' = 끔). 방향이 엇갈린 종목은 확신을 절반으로 줄인다.
+  let cross = null, text3 = null, note3 = '', crossModel = null;
+  if (p1 && !useEndpoint(env)) {
+    const want = String(env.AI_CROSS_MODEL ?? 'auto');
+    crossModel = want === 'off' ? null : want === 'auto' ? aiModels(env).find((m) => m !== model) || null : want;
+    if (crossModel) {
+      try { ({ text: text3, note: note3 } = await callModel(env, prompt, fetcher, crossModel)); } catch (e) { note3 = String(e?.message || e).slice(0, 100); }
+      const p3 = text3 ? parseAiResponse(text3) : null;
+      cross = consistencyOf(parsed, p3);
+      if (p3) parsed = crossShrink(parsed, p3);
+    }
+  }
   const stmts = [kvSetStmt(env.DB, 'ai:at', now)];
   if (!parsed) note = note || 'PARSE_FAILED (fail-closed: scale 0.5x / veto)';
   if (cons) { const roll = rollConsistency(kv['ai:consistency'], cons, now); kv['ai:consistency'] = roll; stmts.push(kvSetStmt(env.DB, 'ai:consistency', roll)); }
+  if (cross) { const roll = { ...rollConsistency(kv['ai:cross'], cross, now), model: String(crossModel).split('/').pop() }; kv['ai:cross'] = roll; stmts.push(kvSetStmt(env.DB, 'ai:cross', roll)); }
   // Persist a complete conservative snapshot, including missing fields on partial success.
   // Historical paper replay then observes the failure only at/after this timestamp.
   const st = env.DB.prepare('INSERT OR REPLACE INTO signals (sym, t, kind, value, note) VALUES (?,?,?,?,?)');
@@ -214,6 +260,7 @@ export async function aiTask(env, kv, now, { fetcher = fetch } = {}) {
   const audit = env.DB.prepare('INSERT INTO ai_audit (t, model, prompt, response, ok, note) VALUES (?,?,?,?,?,?)');
   stmts.push(audit.bind(now, String(model), prompt.slice(0, 20000), text ? String(text).slice(0, 20000) : null, p1 ? 1 : 0, note));
   if (p1 && samples > 1) stmts.push(audit.bind(now, String(model), '(같은 프롬프트 2번째 표본)', text2 ? String(text2).slice(0, 20000) : null, p2 ? 1 : 0, [note2, cons ? `일관성: 점수 차 ${cons.meanAbsDiff}, 방향 일치 ${Math.round(cons.signAgree * 100)}%` : ''].filter(Boolean).join('; ').slice(0, 200)));
+  if (crossModel) stmts.push(audit.bind(now, String(crossModel), '(같은 프롬프트, 다른 모델 교차 판단)', text3 ? String(text3).slice(0, 20000) : null, cross ? 1 : 0, [note3, cross ? `교차: 방향 일치 ${Math.round(cross.signAgree * 100)}%` : ''].filter(Boolean).join('; ').slice(0, 200)));
   await env.DB.batch(stmts);
   return true;
 }

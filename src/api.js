@@ -10,6 +10,8 @@ import { universeFor } from './jobs/paper.js';
 import { aiConfigured, aiLabel } from './jobs/ai.js';
 import { FEEDS } from './data/feeds.js';
 import { marketSignalsView } from './jobs/market-signals.js';
+import { membersView } from './core/members.js';
+import { criteriaView } from './core/criteria.js';
 
 const r4 = (x) => Math.round(x * 10000) / 10000;
 
@@ -28,7 +30,7 @@ function positionsOf(state) {
 }
 
 // kv keys the overview needs (everything else in kv — cursors, backfill state, research trials — is skipped).
-const OVERVIEW_KV = ['decision:current', 'decision:log', 'ai:consistency', 'research:leverage', 'variants', 'crypto:universe', 'sleeve:aggressive:stopped', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'cov:krx:1d', 'cov:crypto:1d', 'cov:crypto:1h', 'research:lastImport', 'research:lastError', 'research:checkedAt'];
+const OVERVIEW_KV = ['family:members', 'criteria:log', 'ai:scorecard', 'ai:cross', 'decision:current', 'decision:log', 'ai:consistency', 'research:leverage', 'variants', 'crypto:universe', 'sleeve:aggressive:stopped', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'cov:krx:1d', 'cov:crypto:1d', 'cov:crypto:1h', 'research:lastImport', 'research:lastError', 'research:checkedAt'];
 const parseKv = (rows) => { const o = {}; for (const r of rows) { try { o[r.k] = JSON.parse(r.v); } catch { o[r.k] = r.v; } } return o; };
 const btFromRow = (r) => ({ ...r, summary: JSON.parse(r.summary) });
 
@@ -49,7 +51,7 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
     db.prepare('SELECT t, kind, strategy_id, message FROM events ORDER BY id DESC LIMIT 40'),
     db.prepare('SELECT t, weights, notes FROM allocations ORDER BY t DESC LIMIT 12'),
     db.prepare('SELECT source, COUNT(*) AS n, MAX(t) AS last FROM feed_items WHERE t >= ? GROUP BY source').bind(now - 3 * DAY),
-    db.prepare('SELECT t, model, ok, note FROM ai_audit ORDER BY id DESC LIMIT 5'),
+    db.prepare("SELECT t, model, ok, note FROM ai_audit WHERE note IS NULL OR note NOT LIKE 'qa;%' ORDER BY id DESC LIMIT 5"),
     db.prepare("SELECT t, payload FROM feed_items WHERE source = 'fear_greed' ORDER BY t DESC LIMIT 1"),
     db.prepare("SELECT run_id, COUNT(DISTINCT t) AS n FROM fills WHERE run_id LIKE '%:paper' GROUP BY run_id"),
   ]);
@@ -82,6 +84,7 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
     strategies.push({
       id: s.id, name: s.name, market: s.market, timeframe: s.timeframe, description: s.description, family: s.family, version: s.version,
       cadence: s.cadence, sleeve: s.sleeve || null, researchOnly: !!s.researchOnly, simulationOnly: !!s.simulationOnly, benchmarkOnly: !!s.benchmarkOnly, overlayOf: s.overlayOf || null, profile: s.profile || null,
+      closed: !!s.closed, memberKey: s.memberKey || null, book: s.book || null, growthCandidate: !!s.growthCandidate, dynamicLeverage: !!s.dynamicLeverage,
       trials: trialsFor(s, ALL), generated: !!s.generated, variantOf: s.variantOf || null,
       stage: l?.stage || (s.benchmarkOnly ? 'benchmark' : 'backtest'), label: l?.label || (s.benchmarkOnly ? '기준선' : '백테스트 중'),
       summary: l?.summary || '첫 평가를 기다리는 중', checks: l?.checks || [], paperSince: l?.paper_since || null, promotedT: l?.promoted_t || null,
@@ -104,13 +107,18 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
   const slInit = sl.reduce((a, x) => a + x.paper.initial, 0), slEq = sl.reduce((a, x) => a + x.paper.equity, 0);
   const labBt = bts.map((r) => r.summary).filter((x) => x?.labTrials).sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0))[0];
   return {
-    now, paperOnly: true, liveOrders: false, version: '2.1.0',
+    now, paperOnly: true, liveOrders: false, version: '2.2.0',
     honesty: {
       freshFrom: Math.min(...runs.map((r) => r.state?.startT).filter(Boolean)) || null,
       labTrials: labBt?.labTrials ?? null, luckSharpe: labBt?.luckSharpe ?? null,
       note: '과거 검증(보존 구간 포함)은 설계자가 이미 지나간 시기라 완전히 처음 보는 자료가 아님. 모의 기록만 진짜 처음 보는 자료.',
     },
     decision: kv['decision:current'] || null,
+    members: membersView(kv['family:members']),
+    criteria: (() => { const c = criteriaView(gates); return { version: c.version, hash: c.hash, goal: c.goal, plain: c.plain, history: c.history, log: [...(kv['criteria:log'] || [])].reverse().slice(0, 20) }; })(),
+    aiScorecard: kv['ai:scorecard'] ? (({ scored, ...x }) => x)(kv['ai:scorecard']) : null,
+    aiCross: kv['ai:cross'] ? { n: kv['ai:cross'].n, signAgree: kv['ai:cross'].signAgree, model: kv['ai:cross'].model, at: kv['ai:cross'].at } : null,
+    ask: { ai: aiConfigured(env) },
     decisionLog: (kv['decision:log'] || []).slice(-15).reverse(),
     aiCompare: aiCompare(strategies, curves, byRun),
     aiConsistency: kv['ai:consistency'] ? { n: kv['ai:consistency'].n, meanAbsDiff: kv['ai:consistency'].meanAbsDiff, signAgree: kv['ai:consistency'].signAgree, vetoAgree: kv['ai:consistency'].vetoAgree, at: kv['ai:consistency'].at } : null,
@@ -181,7 +189,7 @@ export async function exportSignals(env) {
     if (!s) continue;
     out.push({
       strategy_id: s.id, market: s.market, timeframe: s.timeframe, stage: lc[s.id]?.stage || null,
-      eligibleForLive: lc[s.id]?.stage === 'live_candidate' && !s.researchOnly && !s.benchmarkOnly && !s.simulationOnly,
+      eligibleForLive: lc[s.id]?.stage === 'live_candidate' && !s.researchOnly && !s.benchmarkOnly && !s.simulationOnly && !s.growthCandidate && !s.closed,
       asOf: r.last_t, targets: r.state.lastTargets || null,
       pendingPaperOrders: (Array.isArray(r.state.pending) ? r.state.pending : []).map((o) => ({ sym: o.sym, side: o.side, qty: o.qty })),
     });

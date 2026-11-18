@@ -15,14 +15,15 @@ import { EXTRA_STRATEGIES } from './research.js';
 import { btcPerpSimV1 } from './futures-sim.js';
 import { EXTERNAL_STRATEGIES } from './external.js';
 import { AGGRESSIVE } from './aggressive.js';
-import { FAMILY_STRATEGIES } from './family.js';
+import { FAMILY_STRATEGIES, memberStrategies } from './family.js';
+import { GROWTH_20261118 } from './growth-20261118.js';
 import { LAB_20261118 } from './lab-20261118.js';
 
 export const krxBenchmark = makeBuyHold({ id: 'krx_bh_v1', name: '기준선: KODEX 200TR 보유', market: 'krx', sym: '278530' });
 export const cryptoBenchmark = makeBuyHold({ id: 'crypto_bh_v1', name: '기준선: 비트코인 보유', market: 'crypto', sym: 'KRW-BTC' });
 
 // Order = dashboard order: research first paper set (A, B, C, D) first, then research-only experiments.
-export const STRATEGIES = [...EXTRA_STRATEGIES, krxBenchmark, cryptoBenchmark, krxTrendV1, krxEtfMaV1, cryptoMomV1, cryptoTrend1hV1, ...AGGRESSIVE, btcPerpSimV1, ...FAMILY_STRATEGIES, ...LAB_20261118, ...EXTERNAL_STRATEGIES];
+export const STRATEGIES = [...EXTRA_STRATEGIES, krxBenchmark, cryptoBenchmark, krxTrendV1, krxEtfMaV1, cryptoMomV1, cryptoTrend1hV1, ...AGGRESSIVE, btcPerpSimV1, ...FAMILY_STRATEGIES, ...LAB_20261118, ...GROWTH_20261118, ...EXTERNAL_STRATEGIES];
 export const byId = Object.fromEntries(STRATEGIES.map((s) => [s.id, s]));
 
 export function validateStrategy(s) {
@@ -66,9 +67,16 @@ export function variantStrategies(variants = []) {
   }
   return out;
 }
+const FAMILY_IDS = new Set(FAMILY_STRATEGIES.map((s) => s.id));
+/** 고정 전략 + 자동 연구 변형 + 가족 구성원 장부(화면에서 바꾼 설정 반영, 종료된 장부는 closed). */
 export function allStrategies(kv) {
-  return [...STRATEGIES, ...variantStrategies(kv?.variants)];
+  const fam = memberStrategies(kv?.['family:members']);
+  const famById = Object.fromEntries(fam.map((s) => [s.id, s]));
+  const fixed = STRATEGIES.map((s) => (FAMILY_IDS.has(s.id) ? famById[s.id] : s));
+  return [...fixed, ...fam.filter((s) => !FAMILY_IDS.has(s.id)), ...variantStrategies(kv?.variants)];
 }
+/** 진행 중인 장부만(종료된 가족 장부 제외). 모의 진행·백테스트 작업용. */
+export const activeStrategies = (kv) => allStrategies(kv).filter((s) => !s.closed);
 export function strategyById(kv, id) {
-  return byId[id] || variantStrategies(kv?.variants).find((s) => s.id === id) || null;
+  return allStrategies(kv).find((s) => s.id === id) || null;
 }
