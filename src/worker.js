@@ -10,6 +10,7 @@ import { runUpsertStmt, equityStmts, fillStmts, backtestStmt, kvAll, kvSetStmt }
 import { dashboardHtml, loginHtml } from './ui/dashboard.js';
 import { probeSources } from './jobs/market-signals.js';
 import { importResearch } from './jobs/research-import.js';
+import { loadHealth, heartbeatStmts } from './jobs/health.js';
 
 const SEC_HEADERS = {
   'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer',
@@ -40,7 +41,15 @@ const jsonBody = async (request) => {
 async function handle(request, env, ctx) {
   const url = new URL(request.url);
   const p = url.pathname;
-  if (p === '/health') return json({ ok: true, service: 'family-invest-paper-v2', paperOnly: true, liveOrders: false });
+  if (p === '/health') {
+    // Public liveness: only timestamps/lags and task or source NAMES (no amounts, no error texts).
+    // ?strict=1 answers 503 when something is stale, for uptime checkers that only look at the status code.
+    const base = { service: 'family-invest-paper-v2', paperOnly: true, liveOrders: false };
+    let h;
+    try { h = await loadHealth(env, Math.floor(Date.now() / 1000)); } catch (e) { h = { ok: false, problems: ['health:db'], checks: {} }; }
+    const strict = url.searchParams.get('strict') === '1';
+    return json({ ...base, ...h }, strict && !h.ok ? 503 : 200);
+  }
   if (p === '/login' && request.method === 'POST') {
     if (!env.OWNER_PASSWORD) return html(loginHtml('관리자 비밀번호가 아직 설정되지 않았습니다. 배포 스크립트를 다시 실행하세요.'), 503);
     if (!(await loginAllowed(request, env))) return html(loginHtml('로그인 시도가 너무 많습니다. 30분 뒤에 다시 시도하세요.'), 429);
@@ -141,8 +150,11 @@ export default {
       const send = await scheduledSummary(env, now);
       if (send) ctx.waitUntil(send.catch(() => {}));
     } catch (_) {}
-    const log = await tick(env, now);
-    if (env.LOG_TICKS === 'true') console.log(JSON.stringify({ tick: now, log }));
+    let log;
+    try { log = await tick(env, now); } catch (e) { log = [`tick:ERR:${String(e?.message || e).slice(0, 80)}`]; }
+    if (env.LOG_TICKS === 'true' || log.some((x) => String(x).includes(':ERR'))) console.log(JSON.stringify({ tick: now, log }));
+    // heartbeat for /health (stall detection by the morning health check)
+    try { await env.DB.batch(heartbeatStmts(env.DB, now, log)); } catch (_) {}
     // Refresh the cached dashboard JSON only after a light tick (Worker CPU limit); else mark it dirty
     // so the next dashboard request rebuilds it. OVERVIEW_CACHE_IN_TICK: auto | always | never.
     const mode = String(env.OVERVIEW_CACHE_IN_TICK || 'auto');
