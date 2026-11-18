@@ -56,7 +56,7 @@ export function accountGuard(points, rules = GATE_DEFAULTS.live.kill.account) {
   const weekStart = [...points].reverse().find((p) => Math.floor((p.t / DAY + 3) / 7) < wk)?.equity ?? points[0].equity;
   const peak = Math.max(...points.map((p) => p.equity));
   const dr = last.equity / dayStart - 1, wr = last.equity / weekStart - 1, tr = 1 - last.equity / peak;
-  if (tr >= rules.total) return { blockBuys: true, stopAll: true, reason: `계좌 고점 대비 -${Math.round(tr * 1000) / 10}% → 모든 전략 중지, 사람 확인 필요` };
+  if (tr >= rules.total) return { blockBuys: true, stopAll: true, reason: `계좌 고점 대비 -${Math.round(tr * 1000) / 10}% → 모든 전략 자동 중지(다시 시작은 기준을 처음부터 다시 통과해야 함)` };
   if (wr <= -rules.weekly) return { blockBuys: true, stopAll: false, reason: `이번 주 ${Math.round(wr * 1000) / 10}% → 이번 주 신규 매수 중지` };
   if (dr <= -rules.daily) return { blockBuys: true, stopAll: false, reason: `오늘 ${Math.round(dr * 1000) / 10}% → 오늘 신규 매수 중지` };
   return { blockBuys: false, stopAll: false };
