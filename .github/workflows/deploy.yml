@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # CLOUDFLARE_API_TOKEN is given only to the two wrangler steps below, so npm install scripts and tests never see it.
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
       WRANGLER_SEND_METRICS: 'false'
     steps:
@@ -31,6 +31,8 @@ jobs:
           sed -e 's/__D1_DATABASE_ID__/${{ vars.D1_ID }}/' -e '/"\$schema"/d' wrangler.jsonc > wrangler.deploy.jsonc
           grep -q '${{ vars.D1_ID }}' wrangler.deploy.jsonc
       - name: Apply D1 migrations
+        env: { CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}' }
         run: npx -y wrangler@4.152.0 d1 migrations apply DB --remote --config wrangler.deploy.jsonc
       - name: Deploy
+        env: { CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}' }
         run: npx -y wrangler@4.152.0 deploy --config wrangler.deploy.jsonc
