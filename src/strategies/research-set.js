@@ -1,6 +1,6 @@
 // First paper set from RESEARCH-STRATEGY-KO.md section 7 (A, B, C, D).
 import { sma, highestPrior, lowestPrior, roc, rsi, atr } from '../core/indicators.js';
-import { symName } from '../config.js';
+import { symName, cashLikeExempt } from '../config.js';
 import { volTargetWeight, isLastKrxDayOfWeek, weekday, monthOf, pct } from './common.js';
 
 const ETF_RISK = { maxPositionWeight: 0.30, minCash: 0.40, dailyLossLimit: 0.02, weeklyLossLimit: 0.04, maxDrawdownHalt: 0.20 };
@@ -181,6 +181,7 @@ export function withNewsVeto(base) {
       const targets = { ...d.targets }, reasons = { ...(d.reasons || {}) };
       for (const [s, w] of Object.entries(targets)) {
         const cur = ctx.weights[s] || 0;
+        if (cashLikeExempt(s, ctx.t)) continue; // moving idle money into a cash substitute is not a risky buy
         if (w > cur) {
           targets[s] = v.value >= 1 ? cur : cur + (w - cur) / 2;
           reasons[s] = `${reasons[s] || ''} · 뉴스 거부권: ${v.value >= 1 ? '신규 매수 보류' : '매수 크기 절반'}${v.note ? ` (${v.note})` : ''}`;
@@ -209,6 +210,7 @@ export function withAiScale(base) {
       for (const [s, w] of Object.entries(targets)) {
         const cur = ctx.weights[s] || 0;
         if (!(w > cur)) continue;
+        if (cashLikeExempt(s, ctx.t)) continue; // cash substitute: the AI never scores it, so do not halve it
         const a = ctx.signals.ai?.[s];
         const mult = a ? aiMultiplier(a.score) : 0.5;
         targets[s] = cur + (w - cur) * mult;

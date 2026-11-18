@@ -44,6 +44,7 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
   const bts = await backtests(env.DB);
   const rows = [];
   const stmts = [];
+  const killed = new Set();
   let replays = 0; // at most one signal-agreement replay per invocation (CPU budget)
   for (const s of allStrategies(kv)) {
     const p = prev[s.id];
@@ -94,9 +95,7 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
       stmts.push(eventStmt(env.DB, { t: now, kind: 'kill', strategy_id: s.id, message: `⛔ ${s.name}: ${kill.reason} → '실거래 가능' 해제, 모의 검증 다시 시작` }));
       stmts.push(env.DB.prepare("UPDATE live_budgets SET status = 'killed', updated_at = ? WHERE strategy_id = ?").bind(now, s.id));
     } else if (ev.stage !== 'live_candidate') promoted = null;
-    if (p && p.stage !== ev.stage && !['promote'].includes(ev.stage) && ev.stage !== 'live_candidate' && !kill?.kill) {
-      stmts.push(eventStmt(env.DB, { t: now, kind: 'stage', strategy_id: s.id, message: `${s.name}: ${STAGES[p.stage]?.label || p.stage} → ${ev.label}` }));
-    }
+    if (kill?.kill) killed.add(s.id);
     rows.push({ id: s.id, strategy_id: s.id, family: s.family, version: s.version, stage: ev.stage, label: ev.label, summary: ev.summary, checks: ev.checks, paper_since: paperSince, promoted_t: promoted, btSharpe: bt?.holdout?.sharpe });
   }
   // 공격형 슬롯: total sleeve loss -30% -> stop every sleeve strategy permanently (no auto refill).
@@ -123,6 +122,14 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
     }
   }
   applySupersession(rows);
+  // Stage-change events are decided on the FINAL stage (after supersession / sleeve stop). Comparing the stored
+  // stage with the pre-supersession stage re-announced "새 버전으로 대체됨 → 모의 검증 중" on every full pass.
+  for (const r of rows) {
+    const p = prev[r.id];
+    if (!p || p.stage === r.stage || r.stage === 'live_candidate' || killed.has(r.id)) continue;
+    const name = allStrategies(kv).find((x) => x.id === r.id)?.name || r.id;
+    stmts.push(eventStmt(env.DB, { t: now, kind: 'stage', strategy_id: r.id, message: `${name}: ${STAGES[p.stage]?.label || p.stage} → ${r.label}` }));
+  }
   for (const r of rows) stmts.push(lifecycleStmt(env.DB, r));
   stmts.push(kvSetStmt(env.DB, 'lc:at', now));
   await env.DB.batch(stmts);

@@ -8,6 +8,16 @@ export const KRX_ETFS = {
   '153130': 'KODEX 단기채권',
 };
 
+/**
+ * Cash substitutes (parking places for idle money). Overlay books (AI 판단 / 뉴스 거부권) must not
+ * shrink or block moves INTO these: that would turn the A/B twin into "less bond, more raw cash"
+ * instead of "fewer risky buys". Effective from the 2026-11-20 bar so already stored paper fills
+ * (bars before it) still replay 1:1 under the old rule.
+ */
+export const CASH_LIKE = new Set(['153130']);
+export const CASH_LIKE_EXEMPT_FROM = Date.UTC(2026, 10, 20) / 1000; // 2026-11-20 bar label (UTC midnight)
+export const cashLikeExempt = (sym, t) => CASH_LIKE.has(sym) && t >= CASH_LIKE_EXEMPT_FROM;
+
 export const KRX_STOCKS = {
   '005930': '삼성전자',
   '000660': 'SK하이닉스',
