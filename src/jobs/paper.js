@@ -1,7 +1,7 @@
 // Forward paper ledger + in-worker chunked backtest. Both use core/engine.stepBar().
 import { Feed, createState, stepBar, timelineOf } from '../core/engine.js';
 import { buildOpts } from '../core/backtest.js';
-import { computeMetrics } from '../core/metrics.js';
+import { computeMetrics, riskMatched } from '../core/metrics.js';
 import { DAY, HOUR } from '../core/calendar.js';
 import { getRuns, loadSeries, runUpsertStmt, fillStmts, equityStmts, eventStmt, equityPoints, fillsOf, backtestStmt, downsample, kvSetStmt } from '../db/store.js';
 import { allStrategies } from '../strategies/index.js';
@@ -9,7 +9,8 @@ import { cryptoUniverse } from './collect.js';
 import { aiConfigured } from './ai.js';
 import { guardFor } from './market-signals.js';
 import { kstAt } from '../core/calendar.js';
-import { INITIAL_CASH, krxMeta } from '../config.js';
+import { INITIAL_CASH, krxMeta, RULES_20261118_FROM } from '../config.js';
+import { mergeCosts } from '../core/costs.js';
 
 export function universeFor(strategy, kv) {
   return strategy.dynamicUniverse ? cryptoUniverse(kv) : strategy.universe;
@@ -21,7 +22,7 @@ const barClose = (s, t) => (s.timeframe === '1h' ? t + HOUR : s.market === 'krx'
 
 /** Per-bar signal view (as of the bar's close, max 2 days old) for overlay strategies. Paper mode only. */
 export async function signalsFor(env, strategy, from, toT) {
-  if (!strategy.overlayOf) return undefined;
+  if (!strategy.overlayOf && !strategy.usesSignals) return undefined;
   const { results } = await env.DB.prepare("SELECT sym, t, kind, value, note FROM signals WHERE t >= ? AND t <= ? AND kind IN ('news_veto', 'ai_score') ORDER BY t")
     .bind(from - 3 * DAY, barClose(strategy, toT)).all();
   const vetoRequired = String(env.NEWS_VETO_PROVIDER || 'none') !== 'none';
@@ -44,7 +45,9 @@ export async function advanceRun(env, kv, strategy, run, toT, maxBars, { windowF
   const from = Math.max(run.last_t ?? -Infinity, run.start_after ?? -Infinity);
   const signals = run.mode === 'paper' ? await signalsFor(env, strategy, from, toT) : undefined;
   const guard = run.mode === 'paper' ? await guardFor(env, strategy, from, toT) : undefined; // 코인 시장 신호 (paper only)
-  const opts = buildOpts(strategy, { universe, meta: strategy.market === 'krx' ? krxMeta : {}, signals, guard });
+  // 모의 장부: 2026-11-18 묶음(ETF 매매차익 세금)은 RULES_20261118_FROM 봉부터 (이전 저장 체결은 옛 규칙으로 1:1 재생)
+  const costs = run.mode === 'paper' ? { ...mergeCosts(strategy.market), gainTaxFrom: RULES_20261118_FROM } : undefined;
+  const opts = buildOpts(strategy, { universe, meta: strategy.market === 'krx' ? krxMeta : {}, signals, guard, costs });
   const syms = [...new Set([...universe, ...Object.keys(run.state.kind === 'futures' ? {} : run.state.pos || {}), strategy.benchSym].filter(Boolean))];
   const series = await loadSeries(env.DB, strategy.market, strategy.timeframe, syms, from - span(strategy), Math.min(toT, Math.max(from, windowFrom ?? from) + (maxBars + 3) * barSec(strategy.timeframe) * (strategy.market === 'krx' ? 3 : 1.2)));
   const feed = new Feed(series);
@@ -101,7 +104,7 @@ export async function paperTask(env, kv, now, { maxSteps = 2, strategies = allSt
 }
 
 /** Weekly re-run of each strategy over all stored history, in small chunks (default params). */
-export async function workerBacktestTask(env, kv, now, { strategies = allStrategies(kv).filter((x) => !x.external) } = {}) {
+export async function workerBacktestTask(env, kv, now, { strategies = allStrategies(kv).filter((x) => !x.external && !x.noBacktest) } = {}) {
   const runs = Object.fromEntries((await getRuns(env.DB)).map((r) => [r.id, r]));
   for (const s of strategies) {
     const id = `${s.id}:bt`;
@@ -131,6 +134,13 @@ export async function workerBacktestTask(env, kv, now, { strategies = allStrateg
       const cut = pts[k]?.t ?? Infinity;
       const opt = { market: s.market, tf: s.timeframe };
       const summary = { params: s.params, full: computeMetrics(pts, fl, opt), oos: computeMetrics(pts.slice(k), fl.filter((f) => f.t >= cut), opt), note: '워커 자체 재검증(기본 파라미터, 마지막 30% 구간을 표본 외로 사용)' };
+      // risk-matched baseline for the G1 gate: benchmark price path = the stored bench curve; cash part = 단기채권(국내) or cash(코인)
+      try {
+        const oosPts = pts.slice(k);
+        const benchPx = oosPts.map((p) => ({ t: p.t, c: p.bench }));
+        const bond = s.market === 'krx' ? (await loadSeries(env.DB, 'krx', '1d', ['153130'], oosPts[0]?.t ?? 0, oosPts[oosPts.length - 1]?.t ?? 0))['153130'] : null;
+        summary.oos.riskMatched = riskMatched(oosPts, benchPx, bond?.length ? bond : null, opt);
+      } catch (_) {}
       await env.DB.batch([backtestStmt(env.DB, s.id, 'worker', 'worker', summary, downsample(pts.map((p) => ({ t: p.t, e: Math.round(p.equity), b: Math.round(p.bench) })), 200))]);
     }
     return { advanced: s.id, finished };

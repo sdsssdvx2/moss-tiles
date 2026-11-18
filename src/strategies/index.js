@@ -16,12 +16,13 @@ import { btcPerpSimV1 } from './futures-sim.js';
 import { EXTERNAL_STRATEGIES } from './external.js';
 import { AGGRESSIVE } from './aggressive.js';
 import { FAMILY_STRATEGIES } from './family.js';
+import { LAB_20261118 } from './lab-20261118.js';
 
 export const krxBenchmark = makeBuyHold({ id: 'krx_bh_v1', name: '기준선: KODEX 200TR 보유', market: 'krx', sym: '278530' });
 export const cryptoBenchmark = makeBuyHold({ id: 'crypto_bh_v1', name: '기준선: 비트코인 보유', market: 'crypto', sym: 'KRW-BTC' });
 
 // Order = dashboard order: research first paper set (A, B, C, D) first, then research-only experiments.
-export const STRATEGIES = [...EXTRA_STRATEGIES, krxBenchmark, cryptoBenchmark, krxTrendV1, krxEtfMaV1, cryptoMomV1, cryptoTrend1hV1, ...AGGRESSIVE, btcPerpSimV1, ...FAMILY_STRATEGIES, ...EXTERNAL_STRATEGIES];
+export const STRATEGIES = [...EXTRA_STRATEGIES, krxBenchmark, cryptoBenchmark, krxTrendV1, krxEtfMaV1, cryptoMomV1, cryptoTrend1hV1, ...AGGRESSIVE, btcPerpSimV1, ...FAMILY_STRATEGIES, ...LAB_20261118, ...EXTERNAL_STRATEGIES];
 export const byId = Object.fromEntries(STRATEGIES.map((s) => [s.id, s]));
 
 export function validateStrategy(s) {

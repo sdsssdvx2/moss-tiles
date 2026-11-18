@@ -1,16 +1,21 @@
 // "모의 전용(선물 시뮬레이션)": BTC perpetual-like simulation on Upbit SPOT candles.
-// Isolated margin, leverage <= 2x, exchange-side stop, liquidation and funding approximation.
+// Isolated margin, leverage <= 3x (sim cap), exchange-side stop, liquidation and funding approximation.
+// 2026-11-18: optional realism knobs (all off by default so already stored books replay 1:1):
+//   qtyStep/minQty  : exchange lot size (e.g. Binance BTCUSDT 0.001 BTC) -> tiny accounts cannot open at all
+//   rollEveryDays/rollCost : dated futures roll-over (close+reopen cost as a fraction of notional)
 // Paper-only comparison book; there is no futures exchange connectivity anywhere in this repo.
 import { DAY, HOUR } from './calendar.js';
 
 export const FUT_DEFAULTS = {
-  leverage: 2, maxLeverage: 2, mmr: 0.005, fee: 0.0005, slippage: 0.0005,
-  fundingPer8h: 0.0001, // +0.01% / 8h: longs pay shorts (typical positive funding)
+  leverage: 2, maxLeverage: 3, mmr: 0.005, fee: 0.0005, slippage: 0.0005,
+  fundingPer8h: 0.0001, // +0.01% / 8h: longs pay shorts. Binance BTCUSDT 2019-09~2026-11 평균 +0.0104%/8h (2021년 +0.028%)
+  qtyStep: 0, minQty: 0, rollEveryDays: 0, rollCost: 0,
 };
+export const FUT_HARD_MAX_LEVERAGE = 3;
 
 export function createFutState(initialCash) {
   return { v: 1, kind: 'futures', initialCash, cash: initialCash, pos: null, pending: null, equity: initialCash, peak: initialCash,
-    bench: initialCash, benchStart: null, lastPx: {}, fills: 0, sells: 0, wins: 0, fees: 0, funding: 0, liquidations: 0,
+    bench: initialCash, benchStart: null, lastPx: {}, fills: 0, sells: 0, wins: 0, fees: 0, funding: 0, liquidations: 0, skippedMin: 0, rolls: 0,
     halted: false, haltReason: null, lastT: null, startT: null, epochT: null, bars: 0, mem: {} };
 }
 
@@ -40,7 +45,7 @@ export function stepFutures(state, t, feed, opts) {
   // B07: cost stress (e.g. 2x costs check) must reach the futures model too
   const k = opts.costs?.stress || 1;
   if (k !== 1) { cfg.fee *= k; cfg.slippage *= k; }
-  const lev = Math.min(cfg.leverage, cfg.maxLeverage);
+  const lev = Math.min(cfg.leverage, cfg.maxLeverage, opts.allowAnyLeverage ? Infinity : FUT_HARD_MAX_LEVERAGE);
   const sym = opts.universe[0];
   feed.advance(t);
   if (state.startT == null) { state.startT = t; state.epochT = t; }
@@ -53,13 +58,19 @@ export function stepFutures(state, t, feed, opts) {
       if (state.pos && (o.action === 'close' || o.side !== state.pos.side)) closePos(state, t, bar.o * (1 - state.pos.side * cfg.slippage), o.reason, 'signal', fills, cfg.fee);
       if (o.action === 'open' && !state.pos && state.cash > 0) {
         const px = bar.o * (1 + o.side * cfg.slippage);
-        const margin = state.cash * o.size;
-        const qty = (margin * lev) / px;
+        let margin = state.cash * o.size;
+        let qty = (margin * lev) / px;
+        if (cfg.qtyStep > 0) { qty = Math.floor(qty / cfg.qtyStep + 1e-9) * cfg.qtyStep; margin = (qty * px) / lev; }
+        if (qty <= 0 || (cfg.minQty > 0 && qty < cfg.minQty - 1e-12)) {
+          state.skippedMin = (state.skippedMin || 0) + 1;
+          events.push({ t, kind: 'order_cancel', sym, message: `선물 시뮬레이션: 최소 주문 수량(${cfg.minQty || cfg.qtyStep}) 미만이라 진입 못 함 (증거금 ${Math.round(state.cash * o.size)}원)` });
+        } else {
         const f = Math.round(px * qty * cfg.fee);
         state.cash -= margin + f; state.fees += f; state.fills++;
         const stop = o.stopDist ? px - o.side * o.stopDist : null;
         state.pos = { sym, side: o.side, qty, entry: px, margin, lev, stop, liq: liqPrice(px, o.side, lev, cfg.mmr), t };
         fills.push({ t, sym, side: o.side > 0 ? 'BUY' : 'SELL', qty, price: Math.round(px), gross: Math.round(px * qty), fee: f, tax: 0, pnl: 0, reason: o.reason, cash: Math.round(state.cash), phase: 'entry' });
+        }
       }
     }
     // 2) funding, stop and liquidation inside the bar
@@ -68,6 +79,10 @@ export function stepFutures(state, t, feed, opts) {
       const hours = opts.strategy?.timeframe === '1h' ? 1 : 24;
       const fund = p.side * cfg.fundingPer8h * (hours / 8) * p.qty * bar.o;
       p.margin -= fund; state.funding += fund;
+      if (cfg.rollEveryDays > 0 && t - (p.rollT ?? p.t) >= cfg.rollEveryDays * DAY) {
+        const rc = cfg.rollCost * p.qty * bar.o; // 만기 선물 갈아타기(청산+재진입) 비용
+        p.margin -= rc; state.fees += rc; state.rolls = (state.rolls || 0) + 1; p.rollT = t;
+      }
       const adverse = p.side > 0 ? bar.l : bar.h;
       const gapLiq = p.side > 0 ? bar.o <= p.liq : bar.o >= p.liq;
       const hitStop = p.stop != null && (p.side > 0 ? adverse <= p.stop : adverse >= p.stop);

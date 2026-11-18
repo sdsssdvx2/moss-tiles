@@ -71,7 +71,7 @@ test('/health reads the heartbeat; ?strict=1 answers 503 when stalled', async ()
 test('lifecycle: a superseded version is not re-announced on every full pass', async () => {
   const DB = makeD1();
   const goodBt = {
-    holdout: { totalReturn: 0.2, mdd: 0.03, sharpe: 1.5, trades: 120, bench: { mdd: 0.2, sharpe: 0.5 } },
+    holdout: { totalReturn: 0.2, mdd: 0.03, sharpe: 1.5, trades: 120, bench: { mdd: 0.2, sharpe: 0.5 }, riskMatched: { weight: 0.4, totalReturn: 0.1, mdd: 0.1, sharpe: 0.6, cash: 'bond' } },
     holdout2x: { totalReturn: 0.1 }, years: 12, totalTrades: 140, dsr: 0.99, trials: 10,
   };
   const variants = [{ id: 'etf_trend_v2', base: 'etf_trend_v1', version: 2, params: { sma: 100 }, trials: 11 }];

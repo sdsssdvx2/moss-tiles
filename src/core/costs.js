@@ -10,6 +10,8 @@ export const DEFAULT_COSTS = {
     commission: 0.00015,
     sellTaxStock: 0.0020,
     sellTaxEtf: 0,
+    etfGainTax: 0.154,          // 해외주식형·채권형 ETF 매매차익 배당소득세(지방세 포함). meta.gainTax 인 종목만
+    gainTaxFrom: -Infinity,     // 모의 장부는 jobs/paper.js 가 RULES_20261118_FROM 으로 바꿔 넣음(저장 체결 재생 호환)
     slippage: 0.0005,
     integerQty: true,
     tickRound: 'krx',
@@ -69,6 +71,12 @@ export function feesFor(side, gross, cost, meta = {}) {
   let tax = 0;
   if (side === 'SELL') tax = Math.floor(gross * (meta.etf ? cost.sellTaxEtf : cost.sellTaxStock));
   return { fee, tax };
+}
+
+/** 매매차익 과세 ETF의 매도 차익 세금(원 단위 절사). 손실이면 0. t < cost.gainTaxFrom 이면 0(옛 체결 재생 호환). */
+export function gainTaxFor(t, net, basis, cost, meta = {}) {
+  if (!meta.gainTax || !(cost.etfGainTax > 0) || !(t >= (cost.gainTaxFrom ?? -Infinity))) return 0;
+  return Math.max(0, Math.floor((net - basis) * cost.etfGainTax));
 }
 
 /** Max quantity purchasable with `cash` at `price` including commission. */

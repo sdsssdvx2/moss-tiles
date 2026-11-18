@@ -15,7 +15,8 @@
       "migrations_dir": "migrations"
     }
   ],
-  // Workers AI (free 10k neurons/day, no key). AI 판단 job uses it ~4x/day (~2k neurons).
+  // Workers AI (free 10k neurons/day, no key). AI 판단 job: 4 runs/day × 2 same-prompt samples (consistency check).
+  // gpt-oss-120b = 31,818 neurons/M input + 68,182/M output → ≈120-150 neurons/call → ≈1.0-1.3k neurons/day.
   "ai": { "binding": "AI" },
   "triggers": {
     // Free plan: max 5 cron triggers per account. We use 1: every 10 minutes a small unit of work
@@ -33,6 +34,7 @@
     "AI_PROVIDER": "workers-ai",
     "AI_MODEL": "@cf/openai/gpt-oss-120b",
     "AI_FALLBACK_MODELS": "@cf/meta/llama-4-scout-17b-16e-instruct,@cf/zai-org/glm-4.7-flash",
+    "AI_SAMPLES": "2",
     "LOG_TICKS": "false",
     // 코인 시장 신호 (위험 신호 전용). 기준값 바꾸기: MARKET_SIGNALS_JSON 예) {"premHold":0.06,"derivRules":false}
     "MARKET_SIGNALS_ENABLED": "true",

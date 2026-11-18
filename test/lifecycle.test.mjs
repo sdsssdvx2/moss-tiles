@@ -7,8 +7,8 @@ import { deflatedSharpe, psr, normInv, normCdf } from '../src/core/stats.js';
 import { trialsFor, STRATEGIES, byId } from '../src/strategies/index.js';
 import { rng } from './helpers.mjs';
 
-const goodBt = { holdout: { totalReturn: 0.2, mdd: 0.1, sharpe: 1.1, trades: 40, bench: { totalReturn: 0.25, mdd: 0.3, sharpe: 0.8 } }, holdout2x: { totalReturn: 0.15 }, years: 12, totalTrades: 140, dsr: 0.95, trials: 3 };
-const goodPaper = { days: 30, bars: 25, trades: 25, decisions: 25, mdd: 0.03, totalReturn: 0.01, halted: false, agreement: { matched: 5, total: 5 } };
+const goodBt = { holdout: { totalReturn: 0.2, mdd: 0.1, sharpe: 1.1, trades: 40, bench: { totalReturn: 0.25, mdd: 0.3, sharpe: 0.8 }, riskMatched: { weight: 0.5, totalReturn: 0.12, mdd: 0.15, sharpe: 0.9, cash: 'bond' } }, holdout2x: { totalReturn: 0.15 }, years: 12, totalTrades: 140, dsr: 0.95, trials: 3 };
+const goodPaper = { days: 30, bars: 25, trades: 25, decisions: 25, rebalances: 14, mdd: 0.03, totalReturn: 0.01, halted: false, agreement: { matched: 5, total: 5 } };
 const fast = { id: 'f_v1', market: 'crypto', cadence: 'fast' };
 const slowKrx = { id: 's_v1', market: 'krx', cadence: 'slow' };
 
@@ -20,7 +20,7 @@ test('stages: benchmark / backtest / bt_failed / paper / live_candidate', () => 
   assert.equal(evaluateStage({ strategy: fast, bt: goodBt, paper: { ...goodPaper, trades: 19 } }).stage, 'paper');
   const ok = evaluateStage({ strategy: fast, bt: goodBt, paper: goodPaper });
   assert.equal(ok.stage, 'live_candidate');
-  assert.equal(ok.label, '실거래 가능(소액)');
+  assert.equal(ok.label, '운영 점검 통과(실력 증명 아님)');
   assert.ok(ok.checks.every((c) => c.ok));
 });
 

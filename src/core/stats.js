@@ -67,3 +67,15 @@ export function periodReturns(points) {
   for (let i = 1; i < points.length; i++) if (points[i - 1].equity > 0) r.push(points[i].equity / points[i - 1].equity - 1);
   return r;
 }
+
+/**
+ * 운만으로 기대되는 "최고" 연환산 샤프: 실력 없는 전략 nTrials개를 nObs개 기간 동안 돌렸을 때 그중 최고값의 기댓값
+ * (Bailey & Lopez de Prado의 기대 최대값 근사, 전략 간 샤프 표준편차 = 1/sqrt(nObs) 가정). 연구실 전체 시도 수 보정 표시에 사용.
+ */
+export function expectedMaxSharpe(nTrials, nObs, periodsPerYear) {
+  const N = Math.max(1, nTrials | 0);
+  if (N === 1 || !(nObs > 1)) return 0;
+  const g = 0.5772156649;
+  const perPeriod = (1 / Math.sqrt(nObs)) * ((1 - g) * normInv(1 - 1 / N) + g * normInv(1 - 1 / (N * Math.E)));
+  return perPeriod * Math.sqrt(periodsPerYear);
+}

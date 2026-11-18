@@ -7,9 +7,10 @@
 //   3) risk checks (max-drawdown halt, daily loss limit)
 //   4) strategy.decide() on data up to and including bar t -> risk layer -> new pending orders
 import { DAY } from './calendar.js';
-import { fillPrice, feesFor, affordableQty, roundQty } from './costs.js';
+import { fillPrice, feesFor, gainTaxFor, affordableQty, roundQty } from './costs.js';
 import { applyRisk, drawdown } from './risk.js';
 import { applyMarketGuard } from './market-guard.js';
+import { CASH_LIKE } from '../config.js';
 
 export class Feed {
   /** @param {Record<string, Array<{t:number,o:number,h:number,l:number,c:number,v:number}>>} series ascending by t */
@@ -75,8 +76,9 @@ function fillOrders(state, t, feed, opts, fills, events) {
       const gross = qty * price;
       // B11: below the exchange minimum the sell cannot execute; keep the dust position
       if (gross < costs.minOrderKrw) { events?.push({ t, kind: 'order_cancel', sym: o.sym, message: `최소 주문금액 미만 잔량이라 매도 불가 (${Math.round(gross)}원)` }); continue; }
-      const { fee, tax } = feesFor('SELL', gross, costs, m);
+      const { fee, tax: tax0 } = feesFor('SELL', gross, costs, m);
       const basis = pos.cost * (qty / pos.qty);
+      const tax = tax0 + gainTaxFor(t, gross - fee - tax0, basis, costs, m);
       const net = gross - fee - tax;
       const pnl = net - basis;
       state.cash += net;
@@ -108,9 +110,10 @@ function mark(state, t, feed, opts) {
   // B12: value held positions too (a symbol can leave the universe while still held)
   for (const sym of new Set([...opts.universe, ...Object.keys(state.pos)])) { const b = feed.last(sym); if (b) state.lastPx[sym] = b.c; }
   if (opts.benchSym) { const b = feed.last(opts.benchSym); if (b) state.lastPx[opts.benchSym] = b.c; }
-  let inv = 0;
-  for (const [sym, p] of Object.entries(state.pos)) inv += p.qty * (state.lastPx[sym] || 0);
+  let inv = 0, risky = 0;
+  for (const [sym, p] of Object.entries(state.pos)) { const v = p.qty * (state.lastPx[sym] || 0); inv += v; if (!CASH_LIKE.has(sym)) risky += v; }
   state.equity = state.cash + inv;
+  state.risky = risky; // invested minus cash substitutes (단기채권): used only by the risk-matched baseline
   state.peak = Math.max(state.peak, state.equity);
   if (opts.benchSym && state.lastPx[opts.benchSym]) {
     if (state.benchStart == null) state.benchStart = state.lastPx[opts.benchSym];
@@ -160,7 +163,7 @@ export function stepBar(state, t, feed, opts) {
     events.push({ t, kind: 'halt', message: state.haltReason });
   }
 
-  const point = { t, equity: r2(state.equity), cash: r2(state.cash), invested: r2(invested), bench: r2(state.bench) };
+  const point = { t, equity: r2(state.equity), cash: r2(state.cash), invested: r2(invested), risky: r2(state.risky ?? invested), bench: r2(state.bench) };
   if (state.halted) { state.lastT = t; return { state, fills, events, point }; }
 
   const dailyRet = state.dayStartEquity > 0 ? state.equity / state.dayStartEquity - 1 : 0;

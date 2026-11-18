@@ -32,10 +32,10 @@ const strategy = (over = {}) => ({
 });
 const noLimits = { minCash: 0, maxPositionWeight: 1, dailyLossLimit: 0, weeklyLossLimit: 0, maxDrawdownHalt: 0 };
 const goodBt = {
-  holdout: { totalReturn: 0.2, mdd: 0.03, sharpe: 1.5, trades: 120, bench: { mdd: 0.2, sharpe: 0.5 } },
+  holdout: { totalReturn: 0.2, mdd: 0.03, sharpe: 1.5, trades: 120, bench: { mdd: 0.2, sharpe: 0.5 }, riskMatched: { weight: 0.4, totalReturn: 0.1, mdd: 0.1, sharpe: 0.6, cash: 'bond' } },
   holdout2x: { totalReturn: 0.1 }, years: 12, totalTrades: 140, dsr: 0.99, trials: 10,
 };
-const goodPaper = { days: 30, bars: 25, decisions: 25, trades: 25, mdd: 0.01, agreement: { matched: 5, total: 5 } };
+const goodPaper = { days: 30, bars: 25, decisions: 25, rebalances: 14, trades: 25, mdd: 0.01, agreement: { matched: 5, total: 5 } };
 
 test('[B01] no development data before the frozen cut-off → no evaluation (no hold-out leak)', () => {
   const frozen = JSON.parse(readFileSync(new URL('../backtest/holdout.json', import.meta.url), 'utf8'))['crypto:1h:KRW-BTC'];
