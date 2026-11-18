@@ -78,7 +78,7 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
     const risk = mergeRisk(s.risk);
     strategies.push({
       id: s.id, name: s.name, market: s.market, timeframe: s.timeframe, description: s.description, family: s.family, version: s.version,
-      cadence: s.cadence, sleeve: s.sleeve || null, researchOnly: !!s.researchOnly, simulationOnly: !!s.simulationOnly, benchmarkOnly: !!s.benchmarkOnly, overlayOf: s.overlayOf || null,
+      cadence: s.cadence, sleeve: s.sleeve || null, researchOnly: !!s.researchOnly, simulationOnly: !!s.simulationOnly, benchmarkOnly: !!s.benchmarkOnly, overlayOf: s.overlayOf || null, profile: s.profile || null,
       trials: trialsFor(s, ALL), generated: !!s.generated, variantOf: s.variantOf || null,
       stage: l?.stage || (s.benchmarkOnly ? 'benchmark' : 'backtest'), label: l?.label || (s.benchmarkOnly ? '기준선' : '백테스트 중'),
       summary: l?.summary || '첫 평가를 기다리는 중', checks: l?.checks || [], paperSince: l?.paper_since || null, promotedT: l?.promoted_t || null,
