@@ -8,7 +8,19 @@ import { getRuns, lifecycleAll, lifecycleStmt, backtests, equityPoints, eventStm
 import { allStrategies } from '../strategies/index.js';
 import { advanceRun } from './paper.js';
 import { INITIAL_CASH } from '../config.js';
-import { decide, paperRiskMatched } from '../core/decision.js';
+import { decideAll, paperRiskMatched } from '../core/decision.js';
+import { criteriaChange } from '../core/criteria.js';
+
+/** 모의 기록의 연 환산 흔들림(변동성). 공격 장부의 배수 계산에 쓴다. 자료가 5개 미만이면 null. */
+export function annualVol(pts, market, tf) {
+  const r = [];
+  for (let i = 1; i < (pts?.length || 0); i++) if (pts[i - 1].equity > 0) r.push(pts[i].equity / pts[i - 1].equity - 1);
+  if (r.length < 5) return null;
+  const m = r.reduce((a, b) => a + b, 0) / r.length;
+  const sd = Math.sqrt(r.reduce((a, b) => a + (b - m) ** 2, 0) / (r.length - 1));
+  const ppy = tf === '1h' ? 24 * 365 : market === 'krx' ? 252 : 365;
+  return Math.round(sd * Math.sqrt(ppy) * 10000) / 10000;
+}
 
 export function gatesFrom(env) {
   try { return mergeGates(env.GATES_JSON ? JSON.parse(env.GATES_JSON) : {}); } catch { return mergeGates({}); }
@@ -53,6 +65,11 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
     const p = prev[s.id];
     const run = runs[`${s.id}:paper`];
     if (only && !only.includes(s.id) && p) { rows.push({ ...p, id: s.id, btSharpe: btEvidence(bts, s.id, s)?.holdout?.sharpe }); continue; }
+    if (s.closed) {
+      // 구성원 설정 변경으로 종료된 가족 장부: 더 평가하지 않고 기록만 남긴다
+      rows.push({ id: s.id, strategy_id: s.id, family: s.family, version: s.version, stage: 'retired', label: '종료(구성원 변경)', summary: '가족 구성원 설정이 바뀌어 종료된 장부예요. 기록은 그대로 남아요.', checks: [], paper_since: p?.paper_since ?? null, promoted_t: null, closed: true });
+      continue;
+    }
     const bt = btEvidence(bts, s.id, s);
     let paperSince = Math.max(p?.paper_since || 0, run?.state?.epochT || 0) || null;
     let paper = null;
@@ -103,9 +120,9 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
     rows.push({ id: s.id, strategy_id: s.id, family: s.family, version: s.version, stage: ev.stage, label: ev.label, summary: ev.summary, checks: ev.checks, paper_since: paperSince, promoted_t: promoted, btSharpe: bt?.holdout?.sharpe });
     if (!only) {
       facts.push({ id: s.id, name: s.name, market: s.market, cadence: s.cadence, benchmarkOnly: !!s.benchmarkOnly, researchOnly: !!s.researchOnly, simulationOnly: !!s.simulationOnly,
-        sleeve: s.sleeve || null, noBacktest: !!s.noBacktest, stage: ev.stage,
+        sleeve: s.sleeve || null, noBacktest: !!s.noBacktest, stage: ev.stage, growthCandidate: !!s.growthCandidate, dynamicLeverage: !!s.dynamicLeverage,
         bt: bt ? { dsrLab: bt.dsrLab ?? null, sharpe: bt.holdout?.sharpe ?? null, mdd: bt.holdout?.mdd ?? null } : null,
-        paper: paper ? { startT: run.state.startT || null, days: paper.days, rebalances: paper.rebalances, ret: paper.totalReturn, rmRet: paperRiskMatched(paper._pts), mdd: paper.mdd, halted: !!paper.halted } : null });
+        paper: paper ? { startT: run.state.startT || null, days: paper.days, rebalances: paper.rebalances, ret: paper.totalReturn, rmRet: paperRiskMatched(paper._pts), mdd: paper.mdd, halted: !!paper.halted, vol: annualVol(paper._pts, s.market, s.timeframe) } : null });
     }
   }
   // 공격형 슬롯: total sleeve loss -30% -> stop every sleeve strategy permanently (no auto refill).
@@ -136,15 +153,23 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
   // stage with the pre-supersession stage re-announced "새 버전으로 대체됨 → 모의 검증 중" on every full pass.
   for (const r of rows) {
     const p = prev[r.id];
-    if (!p || p.stage === r.stage || r.stage === 'live_candidate' || killed.has(r.id)) continue;
+    if (!p || (p.stage === r.stage && p.label === r.label) || r.stage === 'live_candidate' || killed.has(r.id)) continue;
     const name = allStrategies(kv).find((x) => x.id === r.id)?.name || r.id;
-    stmts.push(eventStmt(env.DB, { t: now, kind: 'stage', strategy_id: r.id, message: `${name}: ${STAGES[p.stage]?.label || p.stage} → ${r.label}` }));
+    stmts.push(eventStmt(env.DB, { t: now, kind: 'stage', strategy_id: r.id, message: `${name}: ${p.label || STAGES[p.stage]?.label || p.stage} → ${r.label}` }));
   }
   // Automatic decision (which strategy / leverage / when to rest) by the pre-registered principles; changes are logged.
   if (!only) {
     // final stages (after supersession / sleeve stop) feed the decision
     for (const f of facts) { const r = rows.find((x) => x.id === f.id); if (r) f.stage = r.stage; }
-    const d = decide(facts, { now, prev: kv['decision:current'] || null });
+    // 기준 버전·지문: 값이 달라졌으면 변경 이력에 전·후를 남긴다(다음 평가부터 적용, 지난 결정 기록은 그대로)
+    const cc = criteriaChange(kv['criteria:current'] || null, gates, now);
+    if (cc.entry) {
+      const clog = [...(kv['criteria:log'] || []), cc.entry].slice(-40);
+      kv['criteria:log'] = clog; kv['criteria:current'] = cc.current;
+      stmts.push(kvSetStmt(env.DB, 'criteria:current', cc.current), kvSetStmt(env.DB, 'criteria:log', clog));
+      if (cc.entry.from) stmts.push(eventStmt(env.DB, { t: now, kind: 'decision', strategy_id: null, message: `📐 판단 기준이 바뀌었어요: ${cc.entry.text} (이번 평가부터 적용, 지난 기록은 그대로)` }));
+    }
+    const d = decideAll(facts, { now, prev: kv['decision:current'] || null, criteria: cc.current });
     const log = [...(kv['decision:log'] || []), ...d.changes].slice(-40);
     kv['decision:current'] = d; kv['decision:log'] = log;
     stmts.push(kvSetStmt(env.DB, 'decision:current', d), kvSetStmt(env.DB, 'decision:log', log));

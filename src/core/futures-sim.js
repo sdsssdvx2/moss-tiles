@@ -58,9 +58,11 @@ export function stepFutures(state, t, feed, opts) {
       if (state.pos && (o.action === 'close' || o.side !== state.pos.side)) closePos(state, t, bar.o * (1 - state.pos.side * cfg.slippage), o.reason, 'signal', fills, cfg.fee);
       if (o.action === 'open' && !state.pos && state.cash > 0) {
         const px = bar.o * (1 + o.side * cfg.slippage);
+        // 주문이 배수를 직접 정할 수 있다(변동성 목표 장부). 없으면 장부의 고정 배수. 어느 쪽이든 상한(3배)을 넘지 못한다.
+        const useLev = Number.isFinite(o.lev) && o.lev > 0 ? Math.min(o.lev, cfg.maxLeverage, opts.allowAnyLeverage ? Infinity : FUT_HARD_MAX_LEVERAGE) : lev;
         let margin = state.cash * o.size;
-        let qty = (margin * lev) / px;
-        if (cfg.qtyStep > 0) { qty = Math.floor(qty / cfg.qtyStep + 1e-9) * cfg.qtyStep; margin = (qty * px) / lev; }
+        let qty = (margin * useLev) / px;
+        if (cfg.qtyStep > 0) { qty = Math.floor(qty / cfg.qtyStep + 1e-9) * cfg.qtyStep; margin = (qty * px) / useLev; }
         if (qty <= 0 || (cfg.minQty > 0 && qty < cfg.minQty - 1e-12)) {
           state.skippedMin = (state.skippedMin || 0) + 1;
           events.push({ t, kind: 'order_cancel', sym, message: `선물 시뮬레이션: 최소 주문 수량(${cfg.minQty || cfg.qtyStep}) 미만이라 진입 못 함 (증거금 ${Math.round(state.cash * o.size)}원)` });
@@ -68,7 +70,7 @@ export function stepFutures(state, t, feed, opts) {
         const f = Math.round(px * qty * cfg.fee);
         state.cash -= margin + f; state.fees += f; state.fills++;
         const stop = o.stopDist ? px - o.side * o.stopDist : null;
-        state.pos = { sym, side: o.side, qty, entry: px, margin, lev, stop, liq: liqPrice(px, o.side, lev, cfg.mmr), t };
+        state.pos = { sym, side: o.side, qty, entry: px, margin, lev: useLev, stop, liq: liqPrice(px, o.side, useLev, cfg.mmr), t };
         fills.push({ t, sym, side: o.side > 0 ? 'BUY' : 'SELL', qty, price: Math.round(px), gross: Math.round(px * qty), fee: f, tax: 0, pnl: 0, reason: o.reason, cash: Math.round(state.cash), phase: 'entry' });
         }
       }
@@ -109,7 +111,7 @@ export function stepFutures(state, t, feed, opts) {
   const point = { t, equity: Math.round(state.equity * 100) / 100, cash: Math.round(state.cash), invested: state.pos ? Math.round(state.pos.qty * (px || 0)) : 0, bench: Math.round(state.bench * 100) / 100 };
   // 3) decision for next bar open
   if (bar && !state.halted) {
-    const ctx = { t, params: opts.params, universe: opts.universe, history: (s, n) => feed.history(s, n), closes: (s, n) => feed.closes(s, n), position: state.pos ? { side: state.pos.side, entry: state.pos.entry } : null, mem: state.mem, barIndex: state.bars - 1 };
+    const ctx = { t, params: opts.params, universe: opts.universe, history: (s, n) => feed.history(s, n), closes: (s, n) => feed.closes(s, n), position: state.pos ? { side: state.pos.side, entry: state.pos.entry } : null, mem: state.mem, barIndex: state.bars - 1, equity: state.equity, peak: state.peak };
     const d = opts.strategy.decideFutures(ctx);
     if (d?.mem) state.mem = d.mem;
     if (d?.order) state.pending = d.order;

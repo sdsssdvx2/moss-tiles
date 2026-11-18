@@ -83,7 +83,7 @@ export async function dailySummaryText(env, now, { settings = parseSettings(null
   for (const s of allStrategies(kv)) {
     const r = runs[`${s.id}:paper`];
     const l = lc[s.id];
-    if (!r) continue;
+    if (!r || s.closed) continue;
     const ret = r.state.equity / r.state.initialCash - 1;
     const b = r.state.bench / r.state.initialCash - 1;
     lines.push(`• ${s.name}: ${pct(ret)} (기준 ${pct(b)}) — ${l?.label || '평가 대기'}${r.state.halted ? ' ⛔' : ''}`);

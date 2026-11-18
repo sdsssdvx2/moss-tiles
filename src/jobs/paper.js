@@ -4,7 +4,7 @@ import { buildOpts } from '../core/backtest.js';
 import { computeMetrics, riskMatched } from '../core/metrics.js';
 import { DAY, HOUR } from '../core/calendar.js';
 import { getRuns, loadSeries, runUpsertStmt, fillStmts, equityStmts, eventStmt, equityPoints, fillsOf, backtestStmt, downsample, kvSetStmt } from '../db/store.js';
-import { allStrategies } from '../strategies/index.js';
+import { activeStrategies } from '../strategies/index.js';
 import { cryptoUniverse } from './collect.js';
 import { aiConfigured } from './ai.js';
 import { guardFor } from './market-signals.js';
@@ -64,7 +64,7 @@ export async function advanceRun(env, kv, strategy, run, toT, maxBars, { windowF
   return { run, fills, points, events, processed: tl.length };
 }
 
-export async function paperTask(env, kv, now, { maxSteps = 2, strategies = allStrategies(kv).filter((x) => !x.external) } = {}) {
+export async function paperTask(env, kv, now, { maxSteps = 2, strategies = activeStrategies(kv).filter((x) => !x.external) } = {}) {
   const runs = Object.fromEntries((await getRuns(env.DB)).map((r) => [r.id, r]));
   const changed = [];
   const cands = strategies.map((s) => ({ s, run: runs[`${s.id}:paper`], ready: kv[`ready:${s.market}:${s.timeframe}`] }))
@@ -104,7 +104,7 @@ export async function paperTask(env, kv, now, { maxSteps = 2, strategies = allSt
 }
 
 /** Weekly re-run of each strategy over all stored history, in small chunks (default params). */
-export async function workerBacktestTask(env, kv, now, { strategies = allStrategies(kv).filter((x) => !x.external && !x.noBacktest) } = {}) {
+export async function workerBacktestTask(env, kv, now, { strategies = activeStrategies(kv).filter((x) => !x.external && !x.noBacktest) } = {}) {
   const runs = Object.fromEntries((await getRuns(env.DB)).map((r) => [r.id, r]));
   for (const s of strategies) {
     const id = `${s.id}:bt`;

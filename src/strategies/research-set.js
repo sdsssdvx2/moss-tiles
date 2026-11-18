@@ -110,7 +110,7 @@ export const cryptoTrendV1 = {
       const bars = ctx.history(sym, p.filterSma + 2);
       if (bars.length < p.slow) continue;
       const c = bars.map((b) => b.c), last = bars[bars.length - 1];
-      const w = volTargetWeight(c, { target: p.volTarget, n: p.volN, ppy: 365, cap: 0.6 });
+      const w = volTargetWeight(c, { target: p.volTarget, n: p.volN, ppy: 365, cap: p.cap ?? 0.6 }); // cap: 공격 장부 변형만 바꿈(기본 0.6 그대로)
       const held = ctx.positions[sym] > 0;
       if (held) {
         const low = lowestPrior(bars.map((b) => b.l), p.exit);

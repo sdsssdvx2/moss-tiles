@@ -11,6 +11,8 @@ import { dashboardHtml, loginHtml } from './ui/dashboard.js';
 import { probeSources } from './jobs/market-signals.js';
 import { importResearch } from './jobs/research-import.js';
 import { loadHealth, heartbeatStmts } from './jobs/health.js';
+import { applyMemberOp, membersView, MemberError } from './core/members.js';
+import { ask } from './jobs/ask.js';
 
 const SEC_HEADERS = {
   'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer',
@@ -100,6 +102,28 @@ async function handle(request, env, ctx) {
     const body = await jsonBody(request);
     if (!body) return json({ error: 'JSON 본문이 필요합니다' }, 400);
     return json(await notifyTest(env, body.mode === 'summary' ? 'summary' : 'test'));
+  }
+  // 가족 구성원·금액 (가상 장부 설정만 바꾼다. 실제 계좌·주문과 무관). 바꾼 시점부터 새 장부, 지난 기록은 그대로.
+  if (p === '/api/members' && request.method === 'GET') return json(membersView((await kvAll(env.DB))['family:members']));
+  if (p === '/api/members' && request.method === 'POST') {
+    const body = await jsonBody(request);
+    if (!body?.op) return json({ error: 'JSON 본문이 필요합니다' }, 400);
+    const kv = await kvAll(env.DB);
+    const now = Math.floor(Date.now() / 1000);
+    try {
+      const { state, entry } = applyMemberOp(kv['family:members'], body.op, now);
+      await env.DB.batch([kvSetStmt(env.DB, 'family:members', state),
+        env.DB.prepare('INSERT INTO events (t, kind, strategy_id, message, notified) VALUES (?,?,?,?,0)').bind(now, 'stage', null, `👪 가족 설정 변경: ${entry.text}`.slice(0, 500))]);
+      await dropOverviewCache(env);
+      return json({ ok: true, entry, view: membersView(state) });
+    } catch (e) { if (e instanceof MemberError) return json({ error: e.message }, 400); throw e; }
+  }
+  // 연구실에게 물어보기: 읽기 전용 Q&A (저장된 사실만으로 답함, 아무것도 바꾸지 못함)
+  if (p === '/api/ask' && request.method === 'POST') {
+    const body = await jsonBody(request);
+    if (!body || typeof body.q !== 'string') return json({ error: '질문을 적어 주세요.' }, 400);
+    const r = await ask(env, await kvAll(env.DB), body.q);
+    return json(r, r.error ? 400 : 200);
   }
   // owner-only: can the Worker egress reach each 코인 시장 신호 source? (status/latency/size only)
   if (p === '/probe' || p === '/api/admin/probe') return json(await probeSources());
