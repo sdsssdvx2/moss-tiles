@@ -1,6 +1,6 @@
 {
   "etf_trend": {
-    "count": 11,
+    "count": 23,
     "seen": [
       "{\"sma\":150,\"band\":0.005,\"volTarget\":0.1,\"volN\":20}",
       "{\"sma\":220,\"band\":0,\"volTarget\":0.08,\"volN\":40}",
@@ -12,7 +12,19 @@
       "{\"sma\":150,\"band\":0.01,\"volTarget\":0.15,\"volN\":20}",
       "{\"sma\":180,\"band\":0.01,\"volTarget\":0.15,\"volN\":20}",
       "{\"sma\":100,\"band\":0,\"volTarget\":0.12,\"volN\":20}",
-      "{\"sma\":250,\"band\":0.01,\"volTarget\":0.15,\"volN\":40}"
+      "{\"sma\":250,\"band\":0.01,\"volTarget\":0.15,\"volN\":40}",
+      "{\"sma\":200,\"band\":0.005,\"volTarget\":0.08,\"volN\":40}",
+      "{\"sma\":200,\"band\":0.01,\"volTarget\":0.12,\"volN\":60}",
+      "{\"sma\":200,\"band\":0,\"volTarget\":0.1,\"volN\":20}",
+      "{\"sma\":250,\"band\":0.01,\"volTarget\":0.12,\"volN\":60}",
+      "{\"sma\":150,\"band\":0.005,\"volTarget\":0.12,\"volN\":40}",
+      "{\"sma\":250,\"band\":0,\"volTarget\":0.12,\"volN\":20}",
+      "{\"sma\":200,\"band\":0.005,\"volTarget\":0.15,\"volN\":20}",
+      "{\"sma\":150,\"band\":0,\"volTarget\":0.1,\"volN\":40}",
+      "{\"sma\":200,\"band\":0,\"volTarget\":0.1,\"volN\":40}",
+      "{\"sma\":250,\"band\":0.01,\"volTarget\":0.12,\"volN\":40}",
+      "{\"sma\":150,\"band\":0.005,\"volTarget\":0.1,\"volN\":60}",
+      "{\"sma\":200,\"band\":0.005,\"volTarget\":0.1,\"volN\":40}"
     ]
   },
   "etf_dip": {
