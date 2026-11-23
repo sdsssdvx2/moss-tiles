@@ -13,6 +13,7 @@ import { weeklyDue, weeklyText } from '../core/decision.js';
 import { kvSetStmt, eventStmt, getRuns, lifecycleAll } from '../db/store.js';
 import { allStrategies } from '../strategies/index.js';
 import { buildScorecard, appendScorecard, scorecardLines } from '../core/scorecard.js';
+import { selfCheckTask } from './selfcheck.js';
 
 export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher = fetch } = {}) {
   const kv = await kvAll(env.DB);
@@ -53,6 +54,7 @@ export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher =
   else await run('allocate', () => allocateTask(env, kv, now));
   await run('scorecard', () => weeklyScorecardTask(env, kv, now));
   await run('weekly', () => weeklyDecisionTask(env, kv, now));
+  await run('selfcheck', () => selfCheckTask(env, kv, now));
   await run('notify', () => notifyPending(env, { fetcher, kv, now }));
   return log;
 }
