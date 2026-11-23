@@ -5,8 +5,7 @@
 // crypto_trend, alt rotation/breakout) are NOT mined further — more random variants there mostly buy luck.
 export const SEARCH_SPACES = {
   etf_trend: { base: 'etf_trend_v1', space: { sma: [150, 200, 250], band: [0, 0.005, 0.01], volTarget: [0.08, 0.10, 0.12, 0.15], volN: [20, 40, 60] } },
-  // 2026-11-23 (#F-002 ②): 과거 검증을 통과한 E(etf_voltarget_v1)도 Claude 없이 숫자 탐색. 범위는 결과 보기 전에 고정.
-  //   volN은 전략의 lookback(70)을 넘지 않게 60까지. 격자 4×3 = 12개.
-  etf_voltarget: { base: 'etf_voltarget_v1', space: { target: [0.06, 0.08, 0.10, 0.12], volN: [20, 40, 60] } },
+  // 2026-11-23: etf_voltarget 탐색을 넣었다가 뺌 — 가족 시도 수가 기본판(etf_voltarget_v1)의 실력 확률에도 더해져
+  //   0.99 → 0.807(시도 8)·0.755(12)로 관문(0.90) 아래가 됨. 이미 통과한 장부의 증거를 결과를 보고 바꾸지 않는다(P6).
 };
 export const VARIANTS_PER_FAMILY_PER_RUN = 12;
