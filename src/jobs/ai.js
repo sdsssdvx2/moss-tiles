@@ -211,17 +211,8 @@ export function parseAiResponse(text, syms = AI_SYMBOLS) {
 /** 지금 AI 장부 프롬프트에서 빼는 피드 종류(macro·onchain은 '세계 지표' 줄로 따로 들어감). */
 export const AI_MAIN_EXCLUDED_TYPES = Object.freeze(['macro', 'onchain', 'disclosure', 'newsletter']);
 
-export async function aiTask(env, kv, now, { fetcher = fetch } = {}) {
-  if (!aiConfigured(env)) return false;
-  if ((kv['ai:at'] || 0) > now - AI_INTERVAL) return false;
-  kv['ai:at'] = now;
-  // 2026-11-23 (#F-002 ③): 공시(DART)·뉴스레터는 지금 AI 장부의 입력을 바꾸지 않게 뺀다 → 따로 만들 비교 장부에서만 시험(기준 불변, P6)
-  const { results } = await env.DB.prepare(`SELECT source, sym, type, payload FROM feed_items WHERE t >= ? AND type NOT IN (${AI_MAIN_EXCLUDED_TYPES.map((x) => `'${x}'`).join(', ')}) ORDER BY t DESC LIMIT 60`).bind(now - DAY).all();
-  const mctx = await marketContext(env, now);
-  mctx.world = await worldLines(env, now);
-  // 자기 보정: 지난 판단을 실제 결과와 대조한 성적표를 프롬프트에 되돌려 준다(하루 한 번 다시 채점)
-  try { mctx.calibration = calibrationLines(await scorecardTask(env, kv, now, AI_SYMBOLS)); } catch (_) { mctx.calibration = []; }
-  const prompt = buildPrompt(results, AI_SYMBOLS, mctx);
+/** 같은 프롬프트로 판단 2표본 + 다른 무료 모델 교차 → 합친 점수. 본 AI와 공시 비교가 같은 절차를 쓴다(입력만 다르게, 2026-11-24). */
+export async function scorePipeline(env, prompt, fetcher = fetch) {
   let text = null, note = '', model = aiModels(env)[0];
   try { ({ text, note, model } = await callModel(env, prompt, fetcher)); } catch (e) { note = String(e?.message || e).slice(0, 100); }
   const p1 = text ? parseAiResponse(text) : null;
@@ -247,6 +238,22 @@ export async function aiTask(env, kv, now, { fetcher = fetch } = {}) {
       if (p3) parsed = crossShrink(parsed, p3);
     }
   }
+  return { text, note, model, p1, samples, text2, note2, p2, parsed, cons, cross, text3, note3, crossModel };
+}
+
+export async function aiTask(env, kv, now, { fetcher = fetch } = {}) {
+  if (!aiConfigured(env)) return false;
+  if ((kv['ai:at'] || 0) > now - AI_INTERVAL) return false;
+  kv['ai:at'] = now;
+  // 2026-11-23 (#F-002 ③): 공시(DART)·뉴스레터는 지금 AI 장부의 입력을 바꾸지 않게 뺀다 → 따로 만들 비교 장부에서만 시험(기준 불변, P6)
+  const { results } = await env.DB.prepare(`SELECT source, sym, type, payload FROM feed_items WHERE t >= ? AND type NOT IN (${AI_MAIN_EXCLUDED_TYPES.map((x) => `'${x}'`).join(', ')}) ORDER BY t DESC LIMIT 60`).bind(now - DAY).all();
+  const mctx = await marketContext(env, now);
+  mctx.world = await worldLines(env, now);
+  // 자기 보정: 지난 판단을 실제 결과와 대조한 성적표를 프롬프트에 되돌려 준다(하루 한 번 다시 채점)
+  try { mctx.calibration = calibrationLines(await scorecardTask(env, kv, now, AI_SYMBOLS)); } catch (_) { mctx.calibration = []; }
+  const prompt = buildPrompt(results, AI_SYMBOLS, mctx);
+  const { text, note: note0, model, p1, samples, text2, note2, p2, parsed, cons, cross, text3, note3, crossModel } = await scorePipeline(env, prompt, fetcher);
+  let note = note0;
   const stmts = [kvSetStmt(env.DB, 'ai:at', now)];
   if (!parsed) note = note || 'PARSE_FAILED (fail-closed: scale 0.5x / veto)';
   if (cons) { const roll = rollConsistency(kv['ai:consistency'], cons, now); kv['ai:consistency'] = roll; stmts.push(kvSetStmt(env.DB, 'ai:consistency', roll)); }
@@ -265,6 +272,69 @@ export async function aiTask(env, kv, now, { fetcher = fetch } = {}) {
   stmts.push(audit.bind(now, String(model), prompt.slice(0, 20000), text ? String(text).slice(0, 20000) : null, p1 ? 1 : 0, note));
   if (p1 && samples > 1) stmts.push(audit.bind(now, String(model), '(같은 프롬프트 2번째 표본)', text2 ? String(text2).slice(0, 20000) : null, p2 ? 1 : 0, [note2, cons ? `일관성: 점수 차 ${cons.meanAbsDiff}, 방향 일치 ${Math.round(cons.signAgree * 100)}%` : ''].filter(Boolean).join('; ').slice(0, 200)));
   if (crossModel) stmts.push(audit.bind(now, String(crossModel), '(같은 프롬프트, 다른 모델 교차 판단)', text3 ? String(text3).slice(0, 20000) : null, cross ? 1 : 0, [note3, cross ? `교차: 방향 일치 ${Math.round(cross.signAgree * 100)}%` : ''].filter(Boolean).join('; ').slice(0, 200)));
+  await env.DB.batch(stmts);
+  return true;
+}
+
+// ---------- 공시 비교(2026-11-24, #F-002 ③): 입력만 다른 쌍둥이 점수 ----------
+// 본 AI가 쓴 프롬프트(ai_audit에 그대로 저장됨)에 DART 공시 제목 칸만 덧붙여 같은 절차(scorePipeline)로 다시 채점 → signals 'ai_score_disc'.
+// 본 AI 저장이 끝난 '다음 틱'에 따로 돌고(본 경로를 못 건드림), 12시간마다(DART 수집 주기, 무료 뉴런 아끼기).
+// 공시가 없으면 AI를 부르지 않고 본 점수를 그대로 옮긴다(입력이 같으니 같은 판단). 실패하면 본 AI와 같은 규칙(-1 → 새 매수 0.5배).
+export const AI_DISC_INTERVAL = 12 * HOUR;
+export const AI_DISC_MAX = 40;
+export function disclosureLines(rows) {
+  const seen = new Set(), out = [];
+  for (const r of rows) {
+    let p = {}; try { p = JSON.parse(r.payload); } catch { /* skip */ }
+    const line = `- [${r.sym}] ${String(p.corp || '').slice(0, 30)}: ${String(p.title || '').replace(/\s+/g, ' ').trim().slice(0, 100)}`;
+    if (seen.has(line)) continue;
+    seen.add(line); out.push(line);
+    if (out.length >= AI_DISC_MAX) break;
+  }
+  return out;
+}
+export function discPrompt(mainPrompt, lines) {
+  return [mainPrompt, '', 'Korean corporate disclosures (DART filing titles, last 24h; most are about single companies, weak evidence for broad ETFs/coins):', ...lines].join('\n');
+}
+
+export async function aiDiscTask(env, kv, now, { fetcher = fetch } = {}) {
+  if (!aiConfigured(env)) return false;
+  const mainAt = kv['ai:at'] || 0;
+  // 본 AI가 이번 틱에 돌았으면(mainAt === now) 다음 틱으로, 6시간 넘은 본 점수는 쓰지 않음, 같은 본 점수로 두 번 안 함
+  if (!mainAt || mainAt >= now || mainAt < now - AI_INTERVAL) return false;
+  const last = kv['ai:disc:at'] || 0;
+  if (last > now - AI_DISC_INTERVAL || (kv['ai:disc:main'] || 0) >= mainAt) return false;
+  kv['ai:disc:at'] = now; kv['ai:disc:main'] = mainAt;
+  // 먼저 시각을 저장: 뒤에서 실패해도 다음 틱마다 AI를 다시 부르지 않게(무료 뉴런 보호)
+  await env.DB.batch([kvSetStmt(env.DB, 'ai:disc:at', now), kvSetStmt(env.DB, 'ai:disc:main', mainAt)]);
+  const auditRow = await env.DB.prepare("SELECT prompt FROM ai_audit WHERE t = ? AND prompt NOT LIKE '(%' ORDER BY rowid LIMIT 1").bind(mainAt).first();
+  const { results: mainSig } = await env.DB.prepare("SELECT sym, value, note FROM signals WHERE kind = 'ai_score' AND t = ?").bind(mainAt).all();
+  if (!auditRow?.prompt || !mainSig.length) return false;
+  const { results: disc } = await env.DB.prepare("SELECT sym, payload FROM feed_items WHERE type = 'disclosure' AND t > ? AND t <= ? ORDER BY t DESC LIMIT 200").bind(mainAt - DAY, mainAt).all();
+  const lines = disclosureLines(disc);
+  const main = Object.fromEntries(mainSig.map((r) => [r.sym, r]));
+  let scores = {}, note = '', model = null, ok = 0, text = null, prompt = null;
+  if (!lines.length) {
+    for (const sym of AI_SYMBOLS) if (main[sym]) scores[sym] = { score: main[sym].value, reason: `공시 없음: 본 점수와 같음` };
+    note = '공시 0건 → AI 부르지 않음';
+    ok = 1;
+  } else {
+    prompt = discPrompt(auditRow.prompt, lines);
+    let r = null;
+    try { r = await scorePipeline(env, prompt, fetcher); } catch (e) { note = String(e?.message || e).slice(0, 100); }
+    if (r) { ({ text, model } = r); note = [r.note, r.cons ? `일관성 방향 ${Math.round(r.cons.signAgree * 100)}%` : '', r.cross ? `교차 방향 ${Math.round(r.cross.signAgree * 100)}%` : ''].filter(Boolean).join('; '); }
+    ok = r?.parsed ? 1 : 0;
+    for (const sym of AI_SYMBOLS) scores[sym] = r?.parsed?.scores[sym] || { score: -1, reason: 'AI 결과 없음: 신규 매수 0.5배' };
+  }
+  const st = env.DB.prepare('INSERT OR REPLACE INTO signals (sym, t, kind, value, note) VALUES (?,?,?,?,?)');
+  const stmts = [];
+  for (const sym of AI_SYMBOLS) if (scores[sym]) stmts.push(st.bind(sym, now, 'ai_score_disc', scores[sym].score, scores[sym].reason));
+  // 점수 단위 비교 기록(장부는 기본 규칙이 안 사면 몇 주 같을 수 있음): 같은 본 판단에 대해 본 점수 vs 공시 포함 점수
+  const row = { at: now, mainAt, n: lines.length, ok, scores: Object.fromEntries(AI_SYMBOLS.map((s) => [s, { main: main[s]?.value ?? null, disc: scores[s]?.score ?? null }])) };
+  const hist = [...(Array.isArray(kv['ai:disc:hist']) ? kv['ai:disc:hist'] : []), row].slice(-60);
+  kv['ai:disc:hist'] = hist;
+  stmts.push(kvSetStmt(env.DB, 'ai:disc:hist', hist));
+  if (prompt) stmts.push(env.DB.prepare('INSERT INTO ai_audit (t, model, prompt, response, ok, note) VALUES (?,?,?,?,?,?)').bind(now, String(model || aiModels(env)[0]), `(공시 포함 비교, 공시 ${lines.length}건)\n${prompt}`.slice(0, 20000), text ? String(text).slice(0, 20000) : null, ok, `공시 비교: ${note}`.slice(0, 200)));
   await env.DB.batch(stmts);
   return true;
 }

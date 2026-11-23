@@ -6,7 +6,7 @@ import { lifecycleTask } from './lifecycle.js';
 import { allocateTask } from './allocate.js';
 import { notifyPending } from './notify.js';
 import { feedsTask } from './feeds.js';
-import { aiTask } from './ai.js';
+import { aiTask, aiDiscTask } from './ai.js';
 import { marketSignalsTask } from './market-signals.js';
 import { researchPullTask } from './research-pull.js';
 import { weeklyDue, weeklyText } from '../core/decision.js';
@@ -41,7 +41,8 @@ export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher =
   }
   // AI judgment and the weekly research pull are self-throttled (6h) and mostly I/O, so they get their own slot instead
   // of competing with the data collectors (which fill the data budget almost every tick). At most one per tick.
-  if (!(await run('ai', () => aiTask(env, kv, now, { fetcher })))) await run('research', () => researchPullTask(env, kv, now, { fetcher }));
+  // 공시 비교 점수(2026-11-24)는 본 AI가 저장을 끝낸 다음 틱에, 같은 자리(ai → 공시 비교 → 연구 가져오기 중 하나)
+  if (!(await run('ai', () => aiTask(env, kv, now, { fetcher }))) && !(await run('aidisc', () => aiDiscTask(env, kv, now, { fetcher })))) await run('research', () => researchPullTask(env, kv, now, { fetcher }));
   const changed = (await run('paper', () => paperTask(env, kv, now, { maxSteps: Number(env.PAPER_STEPS_PER_TICK || 2) }))) || [];
   if (!changed.length && data === 0) await run('workerBacktest', () => workerBacktestTask(env, kv, now));
   const plan = lifecyclePlan(kv, now, changed);

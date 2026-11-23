@@ -197,12 +197,16 @@ export function withNewsVeto(base) {
 // never forces a sale). No endpoint configured -> exact no-op (dashboard says so).
 // Endpoint configured but no fresh score -> conservative 0.5x (fail-closed).
 export const aiMultiplier = (score) => 0.75 + 0.25 * Math.max(-1, Math.min(1, score));
-export function withAiScale(base) {
+// opts.disc (2026-11-24): 같은 규칙, 같은 AI 절차, 입력에 DART 공시 제목만 더한 점수(signals 'ai_score_disc')를 쓰는 쌍둥이
+export function withAiScale(base, opts = {}) {
+  const disc = !!opts.disc, key = disc ? 'aiDisc' : 'ai';
   return {
     ...base,
-    id: `${base.family}_ai_v${base.version}`, family: `${base.family}_ai`, overlayOf: base.id, aiOverlay: true,
-    name: `${base.name} + AI 판단(비중 조절)`, researchOnly: true,
-    description: `${base.description} (AI 비교 장부: 하루 한 번 AI가 뉴스·지표를 읽고 매긴 점수(-1~+1)로 새로 사는 양만 0.5~1배로 줄임. AI가 혼자 매수·매도를 만들지 않음.)`,
+    id: `${base.family}_ai${disc ? 'disc' : ''}_v${base.version}`, family: `${base.family}_ai${disc ? 'disc' : ''}`, overlayOf: base.id, aiOverlay: true, ...(disc ? { aiDisclosure: true } : {}),
+    name: `${base.name} + AI 판단(${disc ? '공시 포함, ' : ''}비중 조절)`, researchOnly: true,
+    description: disc
+      ? `${base.description} (공시 비교 장부: 'AI 판단' 장부와 같은 절차인데 AI가 읽는 자료에 전자공시(DART) 제목만 더함 — 공시가 판단을 낫게 하는지 보는 비교용. 새로 사는 양만 0.5~1배로 줄이고, AI가 혼자 매수·매도를 만들지 않음.)`
+      : `${base.description} (AI 비교 장부: 하루 한 번 AI가 뉴스·지표를 읽고 매긴 점수(-1~+1)로 새로 사는 양만 0.5~1배로 줄임. AI가 혼자 매수·매도를 만들지 않음.)`,
     decide(ctx) {
       const d = base.decide(ctx);
       if (!d?.targets || !ctx.signals?.aiRequired) return d;
@@ -211,10 +215,10 @@ export function withAiScale(base) {
         const cur = ctx.weights[s] || 0;
         if (!(w > cur)) continue;
         if (cashLikeExempt(s, ctx.t)) continue; // cash substitute: the AI never scores it, so do not halve it
-        const a = ctx.signals.ai?.[s];
+        const a = ctx.signals[key]?.[s];
         const mult = a ? aiMultiplier(a.score) : 0.5;
         targets[s] = cur + (w - cur) * mult;
-        reasons[s] = `${reasons[s] || ''} · AI 판단 ${a ? `점수 ${a.score.toFixed(2)} → ${mult.toFixed(2)}배${a.reason ? ` (${a.reason})` : ''}` : '결과 없음 → 안전하게 0.5배'}`;
+        reasons[s] = `${reasons[s] || ''} · AI 판단${disc ? '(공시 포함)' : ''} ${a ? `점수 ${a.score.toFixed(2)} → ${mult.toFixed(2)}배${a.reason ? ` (${a.reason})` : ''}` : '결과 없음 → 안전하게 0.5배'}`;
       }
       return { ...d, targets, reasons };
     },
@@ -226,5 +230,6 @@ export const cryptoTrendVetoV1 = withNewsVeto(cryptoTrendV1);
 
 export const etfTrendAiV1 = withAiScale(etfTrendV1);
 export const cryptoTrendAiV1 = withAiScale(cryptoTrendV1);
+export const etfTrendAiDiscV1 = withAiScale(etfTrendV1, { disc: true });
 
-export const EXTRA_STRATEGIES = [etfTrendV1, etfDipV1, cryptoTrendV1, krxDca, cryptoDca, etfTrendVetoV1, cryptoTrendVetoV1, etfTrendAiV1, cryptoTrendAiV1];
+export const EXTRA_STRATEGIES = [etfTrendV1, etfDipV1, cryptoTrendV1, krxDca, cryptoDca, etfTrendVetoV1, cryptoTrendVetoV1, etfTrendAiV1, cryptoTrendAiV1, etfTrendAiDiscV1];
