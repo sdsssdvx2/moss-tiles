@@ -72,7 +72,7 @@ function themed(css) {
     return `${pre('html[data-theme=dark]')}@media (prefers-color-scheme:dark){${pre('html[data-theme=auto]')}}`;
   }) + 'html[data-theme=dark]{color-scheme:dark}@media (prefers-color-scheme:dark){html[data-theme=auto]{color-scheme:dark}}';
 }
-const THEME_HEAD = `<script>(function(){var t='light';try{t=localStorage.getItem('fip:theme')||'light'}catch(e){}if(!/^(light|dark|auto)$/.test(t))t='light';document.documentElement.setAttribute('data-theme',t)})()</script>`;
+const THEME_HEAD = `<script data-theme>(function(){var d=document.documentElement;if(!d)return;var t='light';try{t=localStorage.getItem('fip:theme')||'light'}catch(e){}if(!/^(light|dark|auto)$/.test(t))t='light';d.setAttribute('data-theme',t)})()</script>`;
 
 
 const JS = String.raw`
@@ -332,7 +332,7 @@ function safeRender(){const open=[...document.querySelectorAll('.strat.open')].m
   catch(e){$('#main').innerHTML='<div class="card"><div class="empty">화면을 그리는 중 문제가 생겼습니다. [새로고침]을 눌러 주세요.</div></div>'}}
 document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>{TAB=b.dataset.tab;NDIRTY=false;if(DATA)safeRender()}));
 $('#refresh').addEventListener('click',()=>load(true));
-const THEMES=['light','dark','auto'],TLABEL={light:'밝게',dark:'어둡게',auto:'자동'};function curTheme(){return document.documentElement.getAttribute('data-theme')||'light'}function showTheme(){const b=$('#theme');if(b)b.textContent='화면: '+TLABEL[curTheme()]}showTheme();$('#theme').addEventListener('click',()=>{const n=THEMES[(THEMES.indexOf(curTheme())+1)%3];document.documentElement.setAttribute('data-theme',n);try{localStorage.setItem('fip:theme',n)}catch(e){}showTheme();if(DATA)safeRender()});
+const THEMES=['light','dark','auto'],TLABEL={light:'밝게',dark:'어둡게',auto:'자동'};function curTheme(){const d=document.documentElement;return(d&&d.getAttribute('data-theme'))||'light'}function showTheme(){const b=$('#theme');if(b)b.textContent='화면: '+TLABEL[curTheme()]}showTheme();$('#theme').addEventListener('click',()=>{const n=THEMES[(THEMES.indexOf(curTheme())+1)%3];if(document.documentElement)document.documentElement.setAttribute('data-theme',n);try{localStorage.setItem('fip:theme',n)}catch(e){}showTheme();if(DATA)safeRender()});
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){if(Date.now()-LAST_TRY>30000)load();else plan(REFRESH_MS)}else{clearTimeout(TIMER);TIMER=null}});
 window.addEventListener('focus',()=>{if(Date.now()-LAST_TRY>30000)load()});
 window.addEventListener('online',()=>load());
