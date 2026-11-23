@@ -10,6 +10,31 @@ import { membersView } from '../core/members.js';
 import { DISCLAIMER } from '../core/decision.js';
 import { symName } from '../config.js';
 import { gatesFrom } from './lifecycle.js';
+import { allStrategies } from '../strategies/index.js';
+
+// 2026-11-23: "왜 이걸 샀어?"에 실제 거래 기록(가상 체결과 그때 규칙이 적은 이유)으로 답한다.
+export const TRADE_DAYS = 14, TRADE_MAX = 40;
+const kstHM = (t) => new Date((t + 9 * 3600) * 1000).toISOString().slice(5, 16).replace('T', ' ');
+/** 최근 가상 체결(이유 포함). 실패하면 빈 목록 — 답을 막지 않는다. */
+export async function recentTrades(env, kv, now) {
+  try {
+    const { results } = await env.DB.prepare("SELECT run_id, t, sym, side, reason, phase FROM fills WHERE t >= ? AND run_id LIKE '%:paper' ORDER BY t DESC, seq DESC LIMIT ?").bind(now - TRADE_DAYS * 86400, TRADE_MAX).all();
+    const names = Object.fromEntries(allStrategies(kv).map((s) => [s.id, { name: s.name, bench: !!s.benchmarkOnly, futures: s.kind === 'futures' || /선물/.test(s.name) }]));
+    return (results || []).map((r) => {
+      const id = String(r.run_id).replace(/:paper$/, '');
+      const n = names[id] || { name: id };
+      const act = n.futures ? (r.phase === 'entry' ? (r.side === 'BUY' ? '롱 진입' : '숏 진입') : r.phase === 'exit' ? '청산' : r.side === 'BUY' ? '매수' : '매도') : r.side === 'BUY' ? '매수' : '매도';
+      return { id, strategy: n.name, sym: r.sym, symName: symName(r.sym), side: r.side, act, t: r.t, when: kstHM(r.t), reason: String(r.reason || '').slice(0, 200) };
+    });
+  } catch (_) { return []; }
+}
+const TRADE_RE = /(?<!안\s?)샀|팔았|매수했|매도했|사들|(?<!실)거래|체결|진입|청산|왜\s*(샀|산|팔|매수|매도)/;
+/** 질문에 나온 종목·전략으로 거래를 고른다. 없으면 최근 것. */
+export function pickTrades(q, trades, n = 5) {
+  const words = (s) => String(s || '').replace(/\(.*?\)/g, ' ').split(/[\s·:.,/+]+/).filter((w) => w.length >= 2);
+  const hit = trades.filter((x) => [x.symName, x.sym, ...words(x.symName), ...words(x.strategy)].some((w) => w && q.includes(w)));
+  return (hit.length ? hit : trades).slice(0, n);
+}
 
 export const ASK_MAX_CHARS = 300;
 export const ASK_DAILY_MAX_DEFAULT = 30; // 프롬프트 ≈ 2.5~3.5천 자. gpt-oss-120b 1회 ≈ 100~160 neurons(추정) → 하루 최대 ≈ 3~4.8k. 넘으면 AI 없이 기록으로만 답함.
@@ -38,6 +63,7 @@ export async function askContext(env, kv, now) {
     scorecard: kv['ai:scorecard'] || null,
     guard: g ? { damp: g.damp || null, altHold: g.altHold || null } : null,
     criteriaLog: (kv['criteria:log'] || []).slice(-5),
+    trades: await recentTrades(env, kv, now),
   };
 }
 
@@ -62,6 +88,8 @@ export function factLines(ctx) {
   const sc = ctx.scorecard;
   if (sc?.n) L.push(`AI 성적표: 지난 판단 ${sc.n}개 중 방향이 맞은 비율 ${Math.round((sc.hit ?? 0) * 100)}% (${sc.horizonDays}일 뒤 실제 가격과 비교)${sc.note ? `, ${sc.note}` : ''}`);
   if (ctx.guard?.damp) L.push(`코인 시장 신호: 새 매수 ${ctx.guard.damp.factor === 0 ? '보류' : `×${ctx.guard.damp.factor}`} 상태`);
+  for (const x of (ctx.trades || []).slice(0, 12)) L.push(`가상 거래 기록: ${x.when} [${x.strategy}] ${x.symName} ${x.act} — 그때 규칙이 적은 이유: ${x.reason}`);
+  if (ctx.trades && !ctx.trades.length) L.push(`최근 ${TRADE_DAYS}일 동안 가상 거래 기록 없음`);
   return L.filter(Boolean);
 }
 
@@ -80,7 +108,16 @@ const TOPICS = [
 export function ruleAnswer(q, ctx) {
   const d = ctx.decision, c = ctx.criteria;
   const hit = TOPICS.filter((t) => t.re.test(q)).map((t) => t.key);
+  if (TRADE_RE.test(q)) hit.push('trade');
   const out = [];
+  if (hit.includes('trade')) {
+    const tr = pickTrades(q, ctx.trades || []);
+    if (tr.length) {
+      out.push('가상 장부가 실제로 사고판 기록이에요(가상 돈, 실제 주문 없음):');
+      for (const x of tr) out.push(`· ${x.when} [${x.strategy}] ${x.symName} ${x.act} — 이유: ${x.reason}`);
+      out.push('이유는 그 장부의 규칙이 그때 숫자를 보고 스스로 적은 것이에요. 규칙은 미리 정해져 있고, 결과를 보고 바꾸지 않아요.');
+    } else out.push(`최근 ${TRADE_DAYS}일 동안 가상 장부가 사고판 기록이 없어요. 규칙의 사는 조건이 맞지 않아 현금으로 기다리는 중이에요.`);
+  }
   const sec = (title) => c.plain.find((x) => x.title.startsWith(title))?.lines || [];
   if (!hit.length || hit.includes('buy') || hit.includes('real')) {
     if (d) {
