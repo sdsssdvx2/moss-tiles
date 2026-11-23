@@ -177,7 +177,9 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
   }
   for (const r of rows) stmts.push(lifecycleStmt(env.DB, r));
   stmts.push(kvSetStmt(env.DB, 'lc:at', now));
+  if (!only) stmts.push(kvSetStmt(env.DB, 'lc:fullAt', now)); // full-pass time: tick.js lifecyclePlan
   await env.DB.batch(stmts);
   kv['lc:at'] = now;
+  if (!only) kv['lc:fullAt'] = now;
   return rows;
 }

@@ -3,7 +3,8 @@
 import { DAY, HOUR, latestFinalKrxDay, latestFinalCryptoDay, latestFinalHour, isKrxBusinessDay } from '../core/calendar.js';
 import { kvSetStmt } from '../db/store.js';
 
-export const HEALTH_KEYS = ['tick:last', 'tick:lastErr', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'lc:at'];
+export const HEALTH_KEYS = ['tick:last', 'tick:lastErr', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'lc:at', 'lc:fullAt', 'lc:fullTry'];
+const FULL_STALE = 12 * HOUR; // full pass is due every 6h
 const TICK_STALE = 30 * 60;  // cron runs every 10 min
 const ERR_RECENT = 6 * HOUR; // a task error newer than this is reported
 
@@ -41,10 +42,17 @@ export function healthReport(kv, healthRows, now) {
     .map((r) => r.source);
   // a failing optional feed (news, fear&greed) is shown but is not a stall by itself
   for (const s of failingSources) if (/^(upbit:1[dh]|krx:|naver)/.test(s)) problems.push(`source:${s}`);
+  // full lifecycle pass (automatic decision / weekly conclusion): only judged once a tick has tried one
+  const fullAt = kv['lc:fullAt'] || null;
+  const fullPassAgeHours = fullAt ? Math.round((now - fullAt) / HOUR) : null;
+  if (kv['lc:fullTry']) {
+    if (!fullAt && now - kv['lc:fullTry'] > HOUR) problems.push('lifecycle:full:none');
+    else if (fullAt && now - fullAt > FULL_STALE) problems.push(`lifecycle:full:stale:${fullPassAgeHours}h`);
+  }
   return {
     ok: problems.length === 0, problems,
     checks: { tickAgeMin, krxLagDays, crypto1dLagDays, crypto1hLagHours, failingSources,
-      lastErrorAt: lastErr?.t || null, lastErrorTasks: lastErr?.tasks || [], lifecycleAgeHours: kv['lc:at'] ? Math.round((now - kv['lc:at']) / HOUR) : null },
+      lastErrorAt: lastErr?.t || null, lastErrorTasks: lastErr?.tasks || [], lifecycleAgeHours: kv['lc:at'] ? Math.round((now - kv['lc:at']) / HOUR) : null, fullPassAgeHours },
   };
 }
 
