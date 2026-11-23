@@ -64,6 +64,16 @@ button.danger{background:none;border:1px solid var(--bad);color:var(--bad);borde
 button.pri{background:var(--brand);color:#fff;border:0;border-radius:10px;padding:10px 14px;font:inherit;font-weight:700;cursor:pointer;min-height:42px}
 @media (max-width:520px){.stats{grid-template-columns:repeat(4,1fr);gap:4px}.stats div{padding:5px 6px}.stats .v{font-size:13px}.stats .k{font-size:9.5px;line-height:1.25}.pipe{grid-template-columns:1fr}.hero .v{font-size:17px}}
 `;
+// 2026-11-23 화면 테마: 기본은 밝게. 사용자가 고르면(밝게/어둡게/자동) 이 브라우저에 기억.
+// 예전엔 PC가 어두운 모드면 저절로 검게 바뀌어 "가끔 이상한 검은 화면" 문의가 있었음.
+function themed(css) {
+  return css.replace(/@media \(prefers-color-scheme:dark\)\{((?:[^{}]+\{[^{}]*\})+)\}/g, (_, inner) => {
+    const pre = (P) => inner.replace(/([^{}]+)\{([^{}]*)\}/g, (m, sel, body) => sel.split(',').map((x) => (x.trim().startsWith(':root') ? x.trim().replace(':root', P) : `${P} ${x.trim()}`)).join(',') + `{${body}}`);
+    return `${pre('html[data-theme=dark]')}@media (prefers-color-scheme:dark){${pre('html[data-theme=auto]')}}`;
+  }) + 'html[data-theme=dark]{color-scheme:dark}@media (prefers-color-scheme:dark){html[data-theme=auto]{color-scheme:dark}}';
+}
+const THEME_HEAD = `<script>(function(){var t='light';try{t=localStorage.getItem('fip:theme')||'light'}catch(e){}if(!/^(light|dark|auto)$/.test(t))t='light';document.documentElement.setAttribute('data-theme',t)})()</script>`;
+
 
 const JS = String.raw`
 const $=(s,r=document)=>r.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -322,6 +332,7 @@ function safeRender(){const open=[...document.querySelectorAll('.strat.open')].m
   catch(e){$('#main').innerHTML='<div class="card"><div class="empty">화면을 그리는 중 문제가 생겼습니다. [새로고침]을 눌러 주세요.</div></div>'}}
 document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>{TAB=b.dataset.tab;NDIRTY=false;if(DATA)safeRender()}));
 $('#refresh').addEventListener('click',()=>load(true));
+const THEMES=['light','dark','auto'],TLABEL={light:'밝게',dark:'어둡게',auto:'자동'};function curTheme(){return document.documentElement.getAttribute('data-theme')||'light'}function showTheme(){const b=$('#theme');if(b)b.textContent='화면: '+TLABEL[curTheme()]}showTheme();$('#theme').addEventListener('click',()=>{const n=THEMES[(THEMES.indexOf(curTheme())+1)%3];document.documentElement.setAttribute('data-theme',n);try{localStorage.setItem('fip:theme',n)}catch(e){}showTheme();if(DATA)safeRender()});
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){if(Date.now()-LAST_TRY>30000)load();else plan(REFRESH_MS)}else{clearTimeout(TIMER);TIMER=null}});
 window.addEventListener('focus',()=>{if(Date.now()-LAST_TRY>30000)load()});
 window.addEventListener('online',()=>load());
@@ -331,17 +342,17 @@ load();
 `;
 
 export function dashboardHtml() {
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light dark"><meta name="robots" content="noindex"><title>모의투자 연구실</title><style>${CSS}</style></head><body><div class="wrap">
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light">${THEME_HEAD}<meta name="robots" content="noindex"><title>모의투자 연구실</title><style>${themed(CSS)}</style></head><body><div class="wrap">
 <header><div class="logo">모의</div><div><h1>모의투자 연구실</h1><div class="sub"><span id="upd">불러오는 중…</span><span class="spin" id="spin" aria-hidden="true"></span></div></div><span class="paper-badge">가상 돈 · 실제 주문 없음</span></header>
 <nav><button data-tab="rank" class="on">결론·순위</button><button data-tab="rules">기준·질문</button><button data-tab="family">가족</button><button data-tab="life">수명주기</button><button data-tab="alloc">운용 매니저</button><button data-tab="data">데이터·비용</button><button data-tab="log">기록</button></nav>
 <div class="banner" id="banner" role="alert"></div>
 <main id="main"><div class="card"><div class="empty">불러오는 중…</div><div class="skel"></div><div class="skel" style="width:80%"></div><div class="skel" style="width:60%"></div></div></main>
-<footer>이 화면은 학습·검증용 모의투자 기록입니다. 투자 권유가 아니며, 과거·모의 성과가 미래 수익을 보장하지 않습니다. 이 프로그램은 증권사·거래소에 주문을 보내는 기능이 없습니다.<br><button class="ghost" id="refresh">새로고침</button> <form method="post" action="/logout" style="display:inline"><button class="ghost">로그아웃</button></form></footer>
+<footer>이 화면은 학습·검증용 모의투자 기록입니다. 투자 권유가 아니며, 과거·모의 성과가 미래 수익을 보장하지 않습니다. 이 프로그램은 증권사·거래소에 주문을 보내는 기능이 없습니다.<br><button class="ghost" id="theme" aria-label="화면 밝기 바꾸기">밝게</button><button class="ghost" id="refresh">새로고침</button> <form method="post" action="/logout" style="display:inline"><button class="ghost">로그아웃</button></form></footer>
 </div><script>${JS}</script></body></html>`;
 }
 
 export function loginHtml(msg) {
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="robots" content="noindex"><title>모의투자 연구실 · 로그인</title><style>${CSS}
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light">${THEME_HEAD}<meta name="robots" content="noindex"><title>모의투자 연구실 · 로그인</title><style>${themed(CSS)}
 .login{max-width:360px;margin:12vh auto;padding:0 16px}input{width:100%;font:inherit;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);margin:10px 0}.go{width:100%;padding:12px;border:0;border-radius:12px;background:var(--brand);color:#fff;font:inherit;font-weight:700;cursor:pointer}.err{color:var(--bad);font-size:13px}</style></head><body><div class="login">
 <div class="row" style="margin-bottom:14px"><div class="logo">모의</div><div><h1>모의투자 연구실</h1><div class="sub">주인 전용 · 가상 돈 · 실제 주문 없음</div></div></div>
 <form class="card" method="post" action="/login"><label for="pw" style="font-size:13px;font-weight:600">관리자 비밀번호</label><input id="pw" type="password" name="password" autocomplete="current-password" required autofocus>${msg ? `<div class="err">${msg.replace(/[<>&]/g, '')}</div>` : ''}<button class="go">들어가기</button></form>
