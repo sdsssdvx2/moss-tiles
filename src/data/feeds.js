@@ -48,6 +48,7 @@ export function macroItem(m, bars) {
   return { sym: '*world', t: Math.floor(last.t / DAY) * DAY, type: 'macro', payload: { id: m.id, title: `${m.ko} ${val}${m.unit} (한 달 ${chgKo})`, en: `${m.en} ${valEn}${m.unit === '%' ? '%' : ''} (1-month change ${chgKo.replace('%p', ' pts')})`, value: Math.round(last.c * 10000) / 10000, chg: Math.round(chg * 10000) / 10000 } };
 }
 
+export const DART_UA = 'family-invest-paper/1.0';
 export const FEEDS = [
   {
     id: 'news_kr', name: '뉴스 제목(언론사 RSS + 구글 뉴스, 한국어)', every: 6 * HOUR, needs: null,
@@ -147,7 +148,14 @@ export const FEEDS = [
     id: 'dart', name: 'DART 공시(전자공시, 키 필요)', every: 12 * HOUR, needs: 'DART_API_KEY',
     async fetch(fetcher, env, now) {
       const d = new Date((now + 9 * HOUR) * 1000).toISOString().slice(0, 10).replace(/-/g, '');
-      const res = await fetcher(`https://opendart.fss.or.kr/api/list.json?crtfc_key=${encodeURIComponent(env.DART_API_KEY)}&bgn_de=${d}&end_de=${d}&page_count=50&corp_cls=Y`);
+      // 2026-11-23: User-Agent가 없으면 DART가 error1.html로 보내고 그 페이지가 자기 자신으로 다시 보내 'Too many redirects'
+      // (Workers fetch는 기본 UA가 없음, PC curl로 재현). 오류 문구에 주소(인증키 포함)가 들어가지 않게 이름만 남긴다.
+      let res;
+      try {
+        res = await fetcher(`https://opendart.fss.or.kr/api/list.json?crtfc_key=${encodeURIComponent(env.DART_API_KEY)}&bgn_de=${d}&end_de=${d}&page_count=50&corp_cls=Y`,
+          { headers: { 'user-agent': DART_UA, accept: 'application/json' }, redirect: 'manual' });
+      } catch (e) { throw new Error(`DART_FETCH_${String(e?.name || 'Error').slice(0, 20)}`); }
+      if (res.status >= 300 && res.status < 400) throw new Error(`DART_REDIRECT_${res.status}`);
       if (!res.ok) throw new Error(`DART_HTTP_${res.status}`);
       const j = await res.json();
       if (j.status && j.status !== '000' && j.status !== '013') throw new Error(`DART_${j.status}`);

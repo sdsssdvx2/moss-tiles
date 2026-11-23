@@ -35,8 +35,12 @@ export async function loadSeries(db, market, tf, syms, fromT, toT) {
 export async function healthOk(db, source) {
   await db.prepare('INSERT INTO data_health (source, last_ok, ok_count, err_count) VALUES (?, ?, 1, 0) ON CONFLICT(source) DO UPDATE SET last_ok = excluded.last_ok, ok_count = ok_count + 1').bind(source, nowSec()).run();
 }
+/** 오류 문구 안의 주소 쿼리 키 값을 가린다(2026-11-23: DART 'Too many redirects' 문구에 인증키가 그대로 저장됐음). */
+export function redactSecrets(s) {
+  return String(s).replace(/([?&](?:crtfc_key|service_?key|api_?key|apikey|key|token|access_token|secret|password|pw|auth)=)[^&\s#"']+/gi, '$1***');
+}
 export async function healthErr(db, source, err) {
-  const msg = String(err?.message || err).slice(0, 120);
+  const msg = redactSecrets(String(err?.message || err)).slice(0, 120);
   await db.prepare('INSERT INTO data_health (source, last_err, err, ok_count, err_count) VALUES (?, ?, ?, 0, 1) ON CONFLICT(source) DO UPDATE SET last_err = excluded.last_err, err = excluded.err, err_count = err_count + 1').bind(source, nowSec(), msg).run();
 }
 
