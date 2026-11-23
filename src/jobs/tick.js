@@ -41,12 +41,28 @@ export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher =
   if (!(await run('ai', () => aiTask(env, kv, now, { fetcher })))) await run('research', () => researchPullTask(env, kv, now, { fetcher }));
   const changed = (await run('paper', () => paperTask(env, kv, now, { maxSteps: Number(env.PAPER_STEPS_PER_TICK || 2) }))) || [];
   if (!changed.length && data === 0) await run('workerBacktest', () => workerBacktestTask(env, kv, now));
-  if ((kv['lc:at'] || 0) < now - 6 * 3600) await run('lifecycle', () => lifecycleTask(env, kv, now));
-  else if (changed.length) await run('lifecycle', () => lifecycleTask(env, kv, now, { only: changed }));
+  const plan = lifecyclePlan(kv, now, changed);
+  if (plan === 'full') {
+    // mark the attempt first: if a full pass ever dies (CPU limit), it is retried once an hour, not every tick
+    kv['lc:fullTry'] = now;
+    await run('lcTry', async () => { await kvSetStmt(env.DB, 'lc:fullTry', now).run(); return false; });
+    await run('lifecycle', () => lifecycleTask(env, kv, now));
+  } else if (plan === 'partial') await run('lifecycle', () => lifecycleTask(env, kv, now, { only: changed }));
   else await run('allocate', () => allocateTask(env, kv, now));
   await run('weekly', () => weeklyDecisionTask(env, kv, now));
   await run('notify', () => notifyPending(env, { fetcher, kv, now }));
   return log;
+}
+
+/**
+ * Which lifecycle pass this tick runs. The full pass (automatic decision, criteria, weekly conclusion input) is keyed on
+ * its OWN time 'lc:fullAt' — 2026-11-23: keyed on 'lc:at', which partial passes refresh every hour (1h books), the full
+ * pass never ran in production. A failed attempt ('lc:fullTry') waits an hour before the next try.
+ */
+export function lifecyclePlan(kv, now, changed = []) {
+  const fullDue = (kv['lc:fullAt'] || 0) < now - 6 * 3600 && (kv['lc:fullTry'] || 0) < now - 3600;
+  if (fullDue) return 'full';
+  return changed.length ? 'partial' : 'allocate';
 }
 
 /** Monday 08:40 KST: one plain-language conclusion (no jargon) as a Telegram event. Cheap: kv only. */
