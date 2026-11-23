@@ -117,7 +117,8 @@ export function decide(facts, { now, prev = null, P = PRINCIPLES } = {}) {
     verdict = 'ready';
     const total = selected.reduce((a, s) => a + s.startKrw, 0);
     headline = `${selected.map((s) => s.name.replace(/\s*\(.*\)$/, '')).join(', ')} 전략이 기준을 통과했어요. 소액(${Math.round(total / 10000 * 10) / 10}만 원)으로 시작해도 되는 단계예요.`;
-    connect = { state: 'ok', text: `실제 돈 연결: 연결해도 되는 단계예요 (전략당 ${selected.map((s) => `${s.startKrw / 10000}만 원`).join('·')}부터, 레버리지 없이 1배).` };
+    // 2026-11-23: 권유처럼 읽히지 않게 — 실제 주문 기능은 없고, 실거래 기준 문서(주문 단위·손실 한도 등)를 한 번 더 확인해야 연결
+    connect = { state: 'ok', text: `실제 돈 연결: 1차 기준을 넘었어요. 실제 주문 기능은 아직 없고, 주문 단위·손실 한도 같은 실거래 기준을 한 번 더 확인한 뒤에만 연결해요 (전략당 ${selected.map((s) => `${s.startKrw / 10000}만 원`).join('·')}부터, 레버리지 없이 1배).` };
     reasons.push(`처음 보는 자료로 ${freshDays}일 동안 미리 정한 기준을 모두 넘었어요.`);
     reasons.push('기준에서 떨어지면 시스템이 자동으로 빼고 현금으로 쉬어요.');
   } else {
@@ -234,8 +235,9 @@ export function decideAll(facts, { now, prev = null, criteria = null } = {}) {
     const g = growth.selected.filter((x) => !x.simOnly);
     for (const x of g) x.leverage = 1; // 실제 돈 연결 권고는 항상 빌린 돈 없이(1배). 계산된 배수는 가상 장부에서만 쓴다.
     out.verdict = 'ready';
-    out.headline = `${g.map((x) => short(x.name)).join(', ')} 전략(공격 장부)이 기준을 통과했어요. 잃어도 되는 소액으로만 시작해도 되는 단계예요.`;
-    out.connect = { state: 'ok', text: `실제 돈 연결: 연결해도 되는 단계예요 (공격 장부, 전략당 ${g.map((x) => `${x.startKrw / 10000}만 원`).join('·')}부터, 빌린 돈 없이).` };
+    // 2026-11-23: 공격 장부 통과는 배수를 쓴 가상 기록 → 1배로 다시 확인하기 전에는 '시작해도 된다'고 말하지 않는다(선발 결과는 그대로).
+    out.headline = `${g.map((x) => short(x.name)).join(', ')} 전략(공격 장부)이 가상 돈 기준을 통과했어요. 배수를 쓴 기록이라, 빌린 돈 없이 1배로 다시 확인한 뒤에만 실제 돈을 생각해요.`;
+    out.connect = { state: 'ok', text: `실제 돈 연결: 아직 아니에요. 공격 장부 통과는 1차 결과라, 빌린 돈 없이 1배로 다시 확인하고 실거래 기준(주문 단위·손실 한도)을 넘어야 해요 (공격 장부, 전략당 ${g.map((x) => `${x.startKrw / 10000}만 원`).join('·')}부터).` };
   }
   out.changes = [...safe.changes, ...growth.changes.map((c) => ({ ...c, book: 'growth', text: `[공격 장부] ${c.text}` }))];
   out.books = { safe: bookSummary(safe, BOOKS.safe.label), growth: bookSummary(growth, BOOKS.growth.label) };

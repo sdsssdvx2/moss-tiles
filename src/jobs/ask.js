@@ -153,8 +153,7 @@ export function askPrompt(q, ctx) {
     '(3) 무엇을 사라/팔라고 권하지 않는다. 수익을 약속하지 않는다. (4) 사용자에게 판단을 떠넘기지 않는다: 시스템이 무엇을 어떻게 정했는지 설명한다. (5) 너는 아무것도 바꿀 수 없다. 바꿔 달라는 요청에는 어느 화면(탭)에서 되는지만 알려 준다. (6) 모든 숫자는 가상 돈 기록이다.',
     '', '사실:', ...factLines(ctx).map((l) => `- ${l}`),
     '', '기준 설명:', ...ctx.criteria.plain.flatMap((s) => [`[${s.title}]`, ...s.lines.map((l) => `- ${l}`)]),
-    '', `질문: ${q}`,
-  ].join('\n').slice(0, 9000);
+  ].join('\n').slice(0, 9000 - 20 - q.length) + `\n\n질문: ${q}`; // 2026-11-23: 길어도 질문은 잘리지 않게(사실 쪽을 자름)
 }
 
 const stripThink = (t) => String(t || '').replace(/<think>[\s\S]*?<\/think>/g, '').replace(/```[a-z]*|```/g, '').trim();

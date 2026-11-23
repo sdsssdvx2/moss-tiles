@@ -91,7 +91,8 @@ export async function dailySummaryText(env, now, { settings = parseSettings(null
   let dataLine = false;
   if (settings.events.data !== 'off') {
     const { results } = await env.DB.prepare('SELECT source, last_ok, last_err FROM data_health').all();
-    const bad = results.filter((h) => (h.last_err || 0) > (h.last_ok || 0));
+    // 2026-11-23: 오래전 한 번 실패하고 꺼진 출처(예: krx:navbf 11-19)가 매일 '데이터 문제'로 찍히지 않게 최근 2일 실패만
+    const bad = results.filter((h) => (h.last_err || 0) > (h.last_ok || 0) && now - (h.last_err || 0) < 2 * 86400);
     if (bad.length) { lines.push('', `⚠️ 데이터 문제: ${bad.map((b) => b.source).join(', ')}`); dataLine = true; }
   }
   const ev = queued.filter((e) => !(dataLine && e.kind === 'data_error'));
