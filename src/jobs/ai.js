@@ -208,11 +208,15 @@ export function parseAiResponse(text, syms = AI_SYMBOLS) {
   return Object.keys(scores).length || Object.keys(veto).length ? { scores, veto } : null;
 }
 
+/** 지금 AI 장부 프롬프트에서 빼는 피드 종류(macro·onchain은 '세계 지표' 줄로 따로 들어감). */
+export const AI_MAIN_EXCLUDED_TYPES = Object.freeze(['macro', 'onchain', 'disclosure', 'newsletter']);
+
 export async function aiTask(env, kv, now, { fetcher = fetch } = {}) {
   if (!aiConfigured(env)) return false;
   if ((kv['ai:at'] || 0) > now - AI_INTERVAL) return false;
   kv['ai:at'] = now;
-  const { results } = await env.DB.prepare("SELECT source, sym, type, payload FROM feed_items WHERE t >= ? AND type NOT IN ('macro', 'onchain') ORDER BY t DESC LIMIT 60").bind(now - DAY).all();
+  // 2026-11-23 (#F-002 ③): 공시(DART)·뉴스레터는 지금 AI 장부의 입력을 바꾸지 않게 뺀다 → 따로 만들 비교 장부에서만 시험(기준 불변, P6)
+  const { results } = await env.DB.prepare(`SELECT source, sym, type, payload FROM feed_items WHERE t >= ? AND type NOT IN (${AI_MAIN_EXCLUDED_TYPES.map((x) => `'${x}'`).join(', ')}) ORDER BY t DESC LIMIT 60`).bind(now - DAY).all();
   const mctx = await marketContext(env, now);
   mctx.world = await worldLines(env, now);
   // 자기 보정: 지난 판단을 실제 결과와 대조한 성적표를 프롬프트에 되돌려 준다(하루 한 번 다시 채점)
