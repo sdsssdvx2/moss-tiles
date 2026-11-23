@@ -30,7 +30,7 @@ function positionsOf(state) {
 }
 
 // kv keys the overview needs (everything else in kv — cursors, backfill state, research trials — is skipped).
-const OVERVIEW_KV = ['family:members', 'criteria:log', 'ai:scorecard', 'ai:cross', 'decision:current', 'decision:log', 'ai:consistency', 'research:leverage', 'variants', 'crypto:universe', 'sleeve:aggressive:stopped', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'cov:krx:1d', 'cov:crypto:1d', 'cov:crypto:1h', 'research:lastImport', 'research:lastError', 'research:checkedAt'];
+const OVERVIEW_KV = ['family:members', 'criteria:log', 'ai:scorecard', 'ai:cross', 'decision:current', 'decision:log', 'paper:weekly', 'ai:consistency', 'research:leverage', 'variants', 'crypto:universe', 'sleeve:aggressive:stopped', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'cov:krx:1d', 'cov:crypto:1d', 'cov:crypto:1h', 'research:lastImport', 'research:lastError', 'research:checkedAt'];
 const parseKv = (rows) => { const o = {}; for (const r of rows) { try { o[r.k] = JSON.parse(r.v); } catch { o[r.k] = r.v; } } return o; };
 const btFromRow = (r) => ({ ...r, summary: JSON.parse(r.summary) });
 
@@ -120,6 +120,7 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
     aiCross: kv['ai:cross'] ? { n: kv['ai:cross'].n, signAgree: kv['ai:cross'].signAgree, model: kv['ai:cross'].model, at: kv['ai:cross'].at } : null,
     ask: { ai: aiConfigured(env) },
     decisionLog: (kv['decision:log'] || []).slice(-15).reverse(),
+    weeklyScorecard: (kv['paper:weekly'] || []).slice(-6), // 주간 성과표(최근 6주, 화면 표시용)
     aiCompare: aiCompare(strategies, curves, byRun),
     aiConsistency: kv['ai:consistency'] ? { n: kv['ai:consistency'].n, meanAbsDiff: kv['ai:consistency'].meanAbsDiff, signAgree: kv['ai:consistency'].signAgree, vetoAgree: kv['ai:consistency'].vetoAgree, at: kv['ai:consistency'].at } : null,
     leverage: kv['research:leverage'] || null,
