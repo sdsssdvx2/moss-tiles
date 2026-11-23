@@ -78,7 +78,7 @@ export async function dailySummaryText(env, now, { settings = parseSettings(null
   const runs = Object.fromEntries((await getRuns(env.DB)).map((r) => [r.strategy_id + ':' + r.mode, r]));
   const kv = await kvAll(env.DB);
   const d = kv['decision:current'];
-  const lines = [`📊 모의투자 하루 요약 (${ymd(now + 9 * 3600)})`, '※ 가상 돈입니다. 실제 주문은 하지 않습니다.', ''];
+  const lines = [`📊 모의투자 하루 요약 (${ymd(now + 9 * 3600)})`, '※ 가상 돈입니다. 실제 주문은 하지 않습니다.', '※ 장부 숫자는 그날 변화가 아니라 각 장부를 시작한 날부터 쌓인 결과예요. 0.0%는 대개 규칙상 사는 조건이 안 맞아 현금으로 기다리는 장부예요.', ''];
   if (d?.headline) lines.push(`📌 결론: ${d.headline}`, d.connect?.text || '', `(${d.disclaimer})`, '', '자세히(장부별 숫자, 읽지 않아도 됨):');
   for (const s of allStrategies(kv)) {
     const r = runs[`${s.id}:paper`];
@@ -86,7 +86,7 @@ export async function dailySummaryText(env, now, { settings = parseSettings(null
     if (!r || s.closed) continue;
     const ret = r.state.equity / r.state.initialCash - 1;
     const b = r.state.bench / r.state.initialCash - 1;
-    lines.push(`• ${s.name}: ${pct(ret)} (기준 ${pct(b)}) — ${l?.label || '평가 대기'}${r.state.halted ? ' ⛔' : ''}`);
+    lines.push(`• ${s.name}: 시작부터 ${pct(ret)} (비교: 그냥 보유 ${pct(b)}) — ${l?.label || '평가 대기'}${r.state.halted ? ' ⛔' : ''}`);
   }
   let dataLine = false;
   if (settings.events.data !== 'off') {

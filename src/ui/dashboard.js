@@ -64,6 +64,16 @@ button.danger{background:none;border:1px solid var(--bad);color:var(--bad);borde
 button.pri{background:var(--brand);color:#fff;border:0;border-radius:10px;padding:10px 14px;font:inherit;font-weight:700;cursor:pointer;min-height:42px}
 @media (max-width:520px){.stats{grid-template-columns:repeat(4,1fr);gap:4px}.stats div{padding:5px 6px}.stats .v{font-size:13px}.stats .k{font-size:9.5px;line-height:1.25}.pipe{grid-template-columns:1fr}.hero .v{font-size:17px}}
 `;
+// 2026-11-23 화면 테마: 기본은 밝게. 사용자가 고르면(밝게/어둡게/자동) 이 브라우저에 기억.
+// 예전엔 PC가 어두운 모드면 저절로 검게 바뀌어 "가끔 이상한 검은 화면" 문의가 있었음.
+function themed(css) {
+  return css.replace(/@media \(prefers-color-scheme:dark\)\{((?:[^{}]+\{[^{}]*\})+)\}/g, (_, inner) => {
+    const pre = (P) => inner.replace(/([^{}]+)\{([^{}]*)\}/g, (m, sel, body) => sel.split(',').map((x) => (x.trim().startsWith(':root') ? x.trim().replace(':root', P) : `${P} ${x.trim()}`)).join(',') + `{${body}}`);
+    return `${pre('html[data-theme=dark]')}@media (prefers-color-scheme:dark){${pre('html[data-theme=auto]')}}`;
+  }) + 'html[data-theme=dark]{color-scheme:dark}@media (prefers-color-scheme:dark){html[data-theme=auto]{color-scheme:dark}}';
+}
+const THEME_HEAD = `<script data-theme>(function(){var d=document.documentElement;if(!d)return;var t='light';try{t=localStorage.getItem('fip:theme')||'light'}catch(e){}if(!/^(light|dark|auto)$/.test(t))t='light';d.setAttribute('data-theme',t)})()</script>`;
+
 
 const JS = String.raw`
 const $=(s,r=document)=>r.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -195,10 +205,12 @@ function levCard(){const L=DATA.leverage;const live=DATA.strategies.filter(s=>s.
   if(live.length)h+='<h3>모의 장부 (처음 보는 자료)</h3><table><tr><th>배수</th><th class="r">모의 수익</th><th class="r">고점 대비</th><th class="r">청산</th></tr>'+live.map(s=>'<tr><td>'+s.leverageCompare+'배</td><td class="r num '+cls(s.paper.ret)+'">'+pct(s.paper.ret)+'</td><td class="r num">'+pabs(s.paper.dd)+'</td><td class="r num">'+s.paper.liquidations+'회</td></tr>').join('')+'</table>';
   if(L&&L.rows)h+='<h3>과거 검증 '+esc(L.range||'')+'</h3><table><tr><th>조건</th><th class="r">수익(연)</th><th class="r">최대 낙폭</th><th class="r">청산</th><th class="r">비용이 먹은 몫</th></tr>'+L.rows.map(r=>'<tr><td>'+esc(r.label)+'<div class="meta">'+esc(r.period)+(r.skipped?' · 최소 주문 미달로 못 산 진입 '+r.skipped+'번':'')+'</div></td><td class="r num '+cls(r.totalReturn)+'">'+pct(r.totalReturn,0)+'<div class="meta">'+pct(r.cagr)+'/년</div></td><td class="r num">'+pabs(r.mdd)+'</td><td class="r num">'+(r.liquidations??'-')+'회</td><td class="r num">'+(r.costShare>1?'이익보다 큼':pabs(r.costShare))+'</td></tr>').join('')+'</table>'+(L.note?'<div class="meta">'+esc(L.note)+'</div>':'');
   return h+'</div>'}
+// 주간 성과표(매주 월요일 08:40 자동 갱신, 보여 주기만 — 선발 기준과 무관)
+function weeklyCard(){const W=DATA.weeklyScorecard||[];if(!W.length)return '<div class="card"><h3 style="margin-top:0">주간 성과표</h3><div class="empty">매주 월요일 08:40에 첫 표가 생겨요.</div></div>';const c=W[W.length-1];const BK={safe:'안전',growth:'공격',research:'연구',family:'가족',bench:'기준선'};let h='<div class="card"><h3 style="margin-top:0">주간 성과표 <span class="s">'+esc(c.week)+' 기준 · 매주 월요일 자동 갱신 · 가상 돈</span></h3><table><tr><th>장부</th><th>구분</th><th>시작부터</th><th>이번 주</th><th>기준선</th><th>단계</th></tr>';for(const r of c.rows)h+='<tr><td>'+esc(r.name)+(r.halted?' ⛔':'')+'</td><td>'+esc(BK[r.book]||r.book)+'</td><td class="num">'+pct(r.ret)+'</td><td class="num">'+(r.weekRet==null?'첫 주':pct(r.weekRet))+'</td><td class="num">'+pct(r.bench)+'</td><td>'+esc(r.label)+'</td></tr>';h+='</table>';if(W.length>1)h+='<p class="s">지난 표: '+W.slice(0,-1).reverse().map(x=>esc(x.week)).join(' · ')+' (최근 12주 보관)</p>';return h+'</div>'}
 function viewRank(){const sorted=[...DATA.strategies].sort((a,b)=>(STAGE_ORDER[a.stage]-STAGE_ORDER[b.stage])||((b.paper?.ret??-9)-(a.paper?.ret??-9)));
   const main=sorted.filter(s=>s.sleeve!=='aggressive'),agg=sorted.filter(s=>s.sleeve==='aggressive');
   const sl=DATA.sleeve||{};const sleeveHead='<div class="card" style="border:2px solid var(--bad)"><div class="row"><div class="grow"><div class="name">⚠️ 고위험(잃어도 되는 돈만) · 공격형 슬롯</div><div class="meta">슬롯 전체가 '+pabs(sl.maxTotalLoss??0.3,0)+' 잃으면 모두 멈추고 자동으로 다시 채우지 않습니다. 나중 실거래 한도 '+won(sl.budgetKrw)+'.</div></div><div class="num '+cls(sl.ret)+'" style="font-weight:800">'+pct(sl.ret)+'</div></div>'+(sl.stopped?'<div class="notice">⛔ '+esc(sl.stopped)+'</div>':'')+'</div>';
-  return conclusionCard()+marketBar()+freshCard()+hero()+'<div class="notice">모든 숫자는 <b>가상 돈</b>(전략마다 따로 1,000만 원, 가족 장부는 '+esc(((DATA.members||{}).members||[]).map(m=>m.label+' '+Math.round(m.budgetKrw/10000)+'만').join('·')||'본인 10만·어머니 100만')+' 원)으로 한 모의투자입니다. 구성원·금액은 [가족] 탭에서 바꿀 수 있습니다. 실제 주문은 하지 않습니다. 카드를 누르면 자세한 내용(이유·보유·위험)이 보입니다.</div>'+pace()+aiCard()+main.map(stratCard).join('')+(agg.length?sleeveHead+agg.map(stratCard).join(''):'')+levCard()}
+  return conclusionCard()+marketBar()+freshCard()+hero()+'<div class="notice">모든 숫자는 <b>가상 돈</b>(전략마다 따로 1,000만 원, 가족 장부는 '+esc(((DATA.members||{}).members||[]).map(m=>m.label+' '+Math.round(m.budgetKrw/10000)+'만').join('·')||'본인 10만·어머니 100만')+' 원)으로 한 모의투자입니다. 구성원·금액은 [가족] 탭에서 바꿀 수 있습니다. 실제 주문은 하지 않습니다. 카드를 누르면 자세한 내용(이유·보유·위험)이 보입니다.</div>'+pace()+aiCard()+main.map(stratCard).join('')+(agg.length?sleeveHead+agg.map(stratCard).join(''):'')+levCard()+weeklyCard()}
 function viewLife(){const col=(stages)=>DATA.strategies.filter(s=>stages.includes(s.stage));const chip=s=>'<span class="chip">'+esc(s.name)+'<small>'+esc(s.label)+(s.paper?' · '+pct(s.paper.ret):'')+'</small></span>';
   let h='<div class="card"><h3 style="margin-top:0">전략 수명주기</h3><div class="pipe"><div class="lane"><div class="step">1단계</div><h4>백테스트</h4>'+col(['backtest','bt_failed']).map(chip).join('')+'</div><div class="lane"><div class="step">2단계</div><h4>모의 검증</h4>'+col(['paper']).map(chip).join('')+'</div><div class="lane"><div class="step">3단계</div><h4>운영 점검 통과</h4>'+(col(['live_candidate']).map(chip).join('')||'<div class="empty">아직 없음</div>')+'</div></div>';
   h+='<div class="returnlane"><h4 style="margin:0 0 6px;font-size:12.5px">⛔ 중단 → 모의 복귀</h4>'+(col(['halted']).map(chip).join('')||'<div class="empty">없음</div>')+'</div>';
@@ -320,6 +332,7 @@ function safeRender(){const open=[...document.querySelectorAll('.strat.open')].m
   catch(e){$('#main').innerHTML='<div class="card"><div class="empty">화면을 그리는 중 문제가 생겼습니다. [새로고침]을 눌러 주세요.</div></div>'}}
 document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>{TAB=b.dataset.tab;NDIRTY=false;if(DATA)safeRender()}));
 $('#refresh').addEventListener('click',()=>load(true));
+const THEMES=['light','dark','auto'],TLABEL={light:'밝게',dark:'어둡게',auto:'자동'};function curTheme(){const d=document.documentElement;return(d&&d.getAttribute('data-theme'))||'light'}function showTheme(){const b=$('#theme');if(b)b.textContent='화면: '+TLABEL[curTheme()]}showTheme();$('#theme').addEventListener('click',()=>{const n=THEMES[(THEMES.indexOf(curTheme())+1)%3];if(document.documentElement)document.documentElement.setAttribute('data-theme',n);try{localStorage.setItem('fip:theme',n)}catch(e){}showTheme();if(DATA)safeRender()});
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){if(Date.now()-LAST_TRY>30000)load();else plan(REFRESH_MS)}else{clearTimeout(TIMER);TIMER=null}});
 window.addEventListener('focus',()=>{if(Date.now()-LAST_TRY>30000)load()});
 window.addEventListener('online',()=>load());
@@ -329,17 +342,17 @@ load();
 `;
 
 export function dashboardHtml() {
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light dark"><meta name="robots" content="noindex"><title>모의투자 연구실</title><style>${CSS}</style></head><body><div class="wrap">
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light">${THEME_HEAD}<meta name="robots" content="noindex"><title>모의투자 연구실</title><style>${themed(CSS)}</style></head><body><div class="wrap">
 <header><div class="logo">모의</div><div><h1>모의투자 연구실</h1><div class="sub"><span id="upd">불러오는 중…</span><span class="spin" id="spin" aria-hidden="true"></span></div></div><span class="paper-badge">가상 돈 · 실제 주문 없음</span></header>
 <nav><button data-tab="rank" class="on">결론·순위</button><button data-tab="rules">기준·질문</button><button data-tab="family">가족</button><button data-tab="life">수명주기</button><button data-tab="alloc">운용 매니저</button><button data-tab="data">데이터·비용</button><button data-tab="log">기록</button></nav>
 <div class="banner" id="banner" role="alert"></div>
 <main id="main"><div class="card"><div class="empty">불러오는 중…</div><div class="skel"></div><div class="skel" style="width:80%"></div><div class="skel" style="width:60%"></div></div></main>
-<footer>이 화면은 학습·검증용 모의투자 기록입니다. 투자 권유가 아니며, 과거·모의 성과가 미래 수익을 보장하지 않습니다. 이 프로그램은 증권사·거래소에 주문을 보내는 기능이 없습니다.<br><button class="ghost" id="refresh">새로고침</button> <form method="post" action="/logout" style="display:inline"><button class="ghost">로그아웃</button></form></footer>
+<footer>이 화면은 학습·검증용 모의투자 기록입니다. 투자 권유가 아니며, 과거·모의 성과가 미래 수익을 보장하지 않습니다. 이 프로그램은 증권사·거래소에 주문을 보내는 기능이 없습니다.<br><button class="ghost" id="theme" aria-label="화면 밝기 바꾸기">밝게</button><button class="ghost" id="refresh">새로고침</button> <form method="post" action="/logout" style="display:inline"><button class="ghost">로그아웃</button></form></footer>
 </div><script>${JS}</script></body></html>`;
 }
 
 export function loginHtml(msg) {
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="robots" content="noindex"><title>모의투자 연구실 · 로그인</title><style>${CSS}
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light">${THEME_HEAD}<meta name="robots" content="noindex"><title>모의투자 연구실 · 로그인</title><style>${themed(CSS)}
 .login{max-width:360px;margin:12vh auto;padding:0 16px}input{width:100%;font:inherit;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);margin:10px 0}.go{width:100%;padding:12px;border:0;border-radius:12px;background:var(--brand);color:#fff;font:inherit;font-weight:700;cursor:pointer}.err{color:var(--bad);font-size:13px}</style></head><body><div class="login">
 <div class="row" style="margin-bottom:14px"><div class="logo">모의</div><div><h1>모의투자 연구실</h1><div class="sub">주인 전용 · 가상 돈 · 실제 주문 없음</div></div></div>
 <form class="card" method="post" action="/login"><label for="pw" style="font-size:13px;font-weight:600">관리자 비밀번호</label><input id="pw" type="password" name="password" autocomplete="current-password" required autofocus>${msg ? `<div class="err">${msg.replace(/[<>&]/g, '')}</div>` : ''}<button class="go">들어가기</button></form>
