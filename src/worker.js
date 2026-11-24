@@ -2,7 +2,7 @@
 import { tick, saveReads } from './jobs/tick.js';
 import { meteredDB } from './db/meter.js';
 import { lifecycleTask } from './jobs/lifecycle.js';
-import { sendTelegram, scheduledSummary, notifyStatus, saveNotifySettings, notifyTest } from './jobs/notify.js';
+import { sendTelegram, scheduledSummary, notifyStatus, saveNotifySettings, notifyTest, botInfo } from './jobs/notify.js';
 import { SettingsError } from './core/notify-schedule.js';
 import { exportSignals, overviewCached, buildOverviewCache, markOverviewDirty, dropOverviewCache } from './api.js';
 import { getSession, createSession, sessionCookie, clearCookie, checkPassword, loginAllowed, recordLogin, revokeSession, bearerOk } from './auth.js';
@@ -93,6 +93,7 @@ async function handle(request, env, ctx) {
     return new Response(text, { status: 200, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-overview-cache': hit ? 'hit' : 'miss', ...SEC_HEADERS } });
   }
   if (p === '/api/notify/settings' && request.method === 'GET') return json(await notifyStatus(env));
+  if (p === '/api/notify/bot' && request.method === 'GET') return json(await botInfo(env)); // #F-012: 봇 사용자 이름·웹훅 여부만(토큰 없음)
   if (p === '/api/notify/settings' && request.method === 'POST') {
     const body = await jsonBody(request);
     if (!body) return json({ error: 'JSON 본문이 필요합니다' }, 400);

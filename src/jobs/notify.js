@@ -152,6 +152,24 @@ export async function scheduledSummary(env, now, { fetcher = fetch } = {}) {
 }
 
 // ---------- settings API ----------
+/**
+ * 2026-11-24 #F-012: 이 Worker가 쓰는 봇의 사용자 이름과 웹훅 사용 여부(주인 전용 화면 조회). 토큰·웹훅 주소는 돌려주지 않는다.
+ * 다른 구역이 같은 봇에 명령(getUpdates/웹훅)을 붙이려 할 때 겹치는지 보려는 것.
+ */
+export async function botInfo(env, fetcher = fetch) {
+  if (!env.TELEGRAM_BOT_TOKEN) return { ready: false };
+  const call = async (m) => {
+    const res = await fetcher(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${m}`);
+    const j = await res.json().catch(() => null);
+    if (!res.ok || !j?.ok) throw new Error(`TG_${m}_${res.status}`);
+    return j.result || {};
+  };
+  try {
+    const me = await call('getMe');
+    const wh = await call('getWebhookInfo');
+    return { ready: true, username: me.username || null, webhook: !!wh.url, pending: Number(wh.pending_update_count) || 0 };
+  } catch (e) { return { ready: true, error: String(e?.message || e).replace(/bot[0-9]+:[A-Za-z0-9_-]+/g, 'bot***').slice(0, 60) }; }
+}
 export async function notifyStatus(env, now = Math.floor(Date.now() / 1000)) {
   const { settings, sent } = await readNotifyKv(env);
   const q = await env.DB.prepare(`SELECT COUNT(*) AS n FROM events WHERE notified = ${QUEUED}`).first();
