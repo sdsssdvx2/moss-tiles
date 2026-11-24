@@ -1,7 +1,9 @@
 // #F-007 ② (2026-11-24): 공개(판정 통과) 후보는 변형 전례대로 자동 선발 대상.
 // (a) 선발 관문이 변형과 똑같은 기준으로 적용됨 (b) 처음 선발되면 '새 후보 <id> 선발' 한 줄(자동 결정 알림·주간 결론).
+process.env.MOSS_SYNTHETIC = '1'; // 합성 자료: 고정된 실제 보존 구간 날짜(backtest/holdout.json)를 쓰지도 새로 쓰지도 않음
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { makeD1 } from './helpers.mjs';
 import { STRATEGIES, variantStrategies, trialsFor } from '../src/strategies/index.js';
 import { CANDIDATES, candidateById } from '../src/strategies/candidates.js';
@@ -133,7 +135,9 @@ test('F-007 (a): the research runner computes the lab-wide trial correction (dsr
   const data = { krx, krxRaw: krx, crypto1d: {}, crypto1h: {}, source: 'test' };
   // 실제 파이프라인 값: 후보는 판정 때 자기 자신 1회(trialsFor(s,[s])), 새 가족의 첫 변형은 기록된 가족 합계 1회 → 둘 다 가족 시도 1
   const asVariant = { ...c, id: 'etf_gold_trend_v9', candidate: false, releaseDate: undefined, generated: true, variantOf: c.id, version: 9, priorTrials: 1 };
+  const hf = new URL('../backtest/holdout.json', import.meta.url), before = readFileSync(hf, 'utf8');
   const a = evaluateStrategy(c, data, { extraTrials: trialsFor(c, [c]) }), b = evaluateStrategy(asVariant, data, { extraTrials: 0 });
+  assert.equal(readFileSync(hf, 'utf8'), before, '시험이 보존 구간 고정 파일을 바꾸면 안 됨(주간 작업이 그 파일을 커밋함)');
   assert.equal(a.trials, 1); assert.equal(b.trials, 1);
   assert.ok(a && b);
   assert.ok(Number.isFinite(a.dsrLab) && a.labTrials >= 1, JSON.stringify({ dsrLab: a.dsrLab, labTrials: a.labTrials }));
