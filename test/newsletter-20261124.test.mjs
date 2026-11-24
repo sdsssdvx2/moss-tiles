@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 import { makeD1 } from './helpers.mjs';
 import { FEEDS, parseRssItems, readRssHead, NEWSLETTER_SOURCES } from '../src/data/feeds.js';
 import { feedsTask } from '../src/jobs/feeds.js';
-import { aiTask, aiDiscTask, AI_SYMBOLS, AI_DISC_INTERVAL, newsletterLines, discPrompt, AI_MAIN_EXCLUDED_TYPES } from '../src/jobs/ai.js';
+import { aiTask, aiDiscTask, aiNlTask, AI_SYMBOLS, AI_DISC_INTERVAL, newsletterLines, discPrompt, nlPrompt, AI_MAIN_EXCLUDED_TYPES } from '../src/jobs/ai.js';
+import { byId } from '../src/strategies/index.js';
 
 const NOW = 1_800_000_000;
 const DAY = 86400;
@@ -112,13 +113,13 @@ test('main AI never reads newsletters (prompt identical with or without them)', 
   assert.ok(!a.prompts.some((p) => p.includes('Investment newsletters') || p.includes('코스피 해설')));
 });
 
-test('comparison twin: newsletters alone are enough to score (no disclosures), quoted with a warning; main rows untouched', async () => {
+test('newsletter twin (#F-011 ①, own twin): scores with newsletters quoted with a warning; main rows untouched', async () => {
   const { DB, env, prompts } = aiSetup({ disclosures: false });
   const kv = {};
   await aiTask(env, kv, NOW);
   const mainPrompt = prompts[0], mainRows = rows(DB, "SELECT * FROM signals WHERE kind = 'ai_score' ORDER BY sym");
   const n = prompts.length;
-  await aiDiscTask(env, kv, NOW + 600);
+  await aiNlTask(env, kv, NOW + 600);
   const twin = prompts.slice(n);
   assert.ok(twin.length >= 1);
   for (const p of twin) {
@@ -128,11 +129,42 @@ test('comparison twin: newsletters alone are enough to score (no disclosures), q
     assert.ok(!p.includes('Korean corporate disclosures')); // 공시가 없으면 공시 칸 없음
   }
   assert.deepEqual(rows(DB, "SELECT * FROM signals WHERE kind = 'ai_score' ORDER BY sym"), mainRows);
-  const disc = rows(DB, "SELECT value FROM signals WHERE kind = 'ai_score_disc'");
-  assert.equal(disc.length, AI_SYMBOLS.length);
-  assert.ok(disc.every((r) => r.value === -0.4));
-  assert.match(rows(DB, 'SELECT prompt FROM ai_audit ORDER BY id DESC LIMIT 1')[0].prompt, /^\(공시 포함 비교, 공시 0건\) \+뉴스레터 2건\n/);
-  assert.equal(kv['ai:disc:hist'].at(-1).nl, 2);
+  const nlSig = rows(DB, "SELECT value FROM signals WHERE kind = 'ai_score_nl'");
+  assert.equal(nlSig.length, AI_SYMBOLS.length);
+  assert.ok(nlSig.every((r) => r.value === -0.4));
+  assert.equal(rows(DB, "SELECT COUNT(*) n FROM signals WHERE kind = 'ai_score_disc'")[0].n, 0); // 공시 쌍둥이와 섞이지 않음
+  assert.match(rows(DB, 'SELECT prompt FROM ai_audit ORDER BY id DESC LIMIT 1')[0].prompt, /^\(뉴스레터 포함 비교, 뉴스레터 2건\)\n/);
+  assert.equal(kv['ai:nl:hist'].at(-1).n, 2);
+  assert.deepEqual(Object.keys(kv['ai:nl:hist'].at(-1).scores[AI_SYMBOLS[0]]), ['main', 'nl']);
+  assert.equal(twin[0], nlPrompt(mainPrompt, newsletterLines(rows(DB, "SELECT sym, t, payload FROM feed_items WHERE type = 'newsletter' AND t > " + (NOW - 7 * DAY) + " AND t <= " + NOW + " ORDER BY t DESC LIMIT 20"))));
+});
+
+test('disclosure twin is back to its pre-11-24 definition: it never reads newsletters (no disclosures → copies the main score, no AI call)', async () => {
+  const { DB, env, prompts } = aiSetup({ disclosures: false, newsletters: true });
+  const kv = {};
+  await aiTask(env, kv, NOW);
+  const n = prompts.length;
+  await aiDiscTask(env, kv, NOW + 600);
+  assert.equal(prompts.length, n); // 뉴스레터가 있어도 공시가 없으면 AI를 부르지 않음
+  const disc = rows(DB, "SELECT value, note FROM signals WHERE kind = 'ai_score_disc'");
+  assert.ok(disc.length && disc.every((r) => r.value === 0.2 && /공시 없음/.test(r.note)));
+  assert.ok(!('nl' in kv['ai:disc:hist'].at(-1)));
+  const d = aiSetup({ disclosures: true, newsletters: true });
+  const kv2 = {};
+  await aiTask(d.env, kv2, NOW);
+  const m = d.prompts.length;
+  await aiDiscTask(d.env, kv2, NOW + 600);
+  for (const p of d.prompts.slice(m)) { assert.ok(p.includes('Korean corporate disclosures')); assert.ok(!p.includes('Investment newsletters')); }
+  assert.match(rows(d.DB, 'SELECT prompt FROM ai_audit ORDER BY id DESC LIMIT 1')[0].prompt, /^\(공시 포함 비교, 공시 1건\)\n/);
+});
+
+test('newsletter twin ledger: separate strategy reading only ai_score_nl (research only), disclosure ledger unchanged', () => {
+  const nl = byId.etf_trend_ainl_v1, disc = byId.etf_trend_aidisc_v1;
+  assert.ok(nl && nl.researchOnly && nl.aiNewsletter && nl.overlayOf === 'etf_trend_v1');
+  assert.equal(nl.family, 'etf_trend_ainl');
+  assert.match(nl.name, /뉴스레터 포함/);
+  assert.match(disc.name, /공시 포함, /);
+  assert.ok(!/뉴스레터 포함/.test(disc.name));
 });
 
 test('comparison twin: disclosures + newsletters → both sections, disclosure section first (unchanged wording)', () => {
