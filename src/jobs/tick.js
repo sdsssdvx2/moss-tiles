@@ -9,7 +9,8 @@ import { feedsTask } from './feeds.js';
 import { aiTask, aiDiscTask } from './ai.js';
 import { marketSignalsTask } from './market-signals.js';
 import { researchPullTask } from './research-pull.js';
-import { weeklyDue, weeklyText } from '../core/decision.js';
+import { weeklyDue, weeklyText, newCandidateLines } from '../core/decision.js';
+import { candidateById } from '../strategies/candidates.js';
 import { kvSetStmt, eventStmt, getRuns, lifecycleAll } from '../db/store.js';
 import { allStrategies } from '../strategies/index.js';
 import { buildScorecard, appendScorecard, scorecardLines } from '../core/scorecard.js';
@@ -75,10 +76,13 @@ export function lifecyclePlan(kv, now, changed = []) {
 export async function weeklyDecisionTask(env, kv, now) {
   const d = kv['decision:current'];
   if (!d || !weeklyDue(now, kv['decision:weeklyAt'])) return false;
+  const lastWeekly = kv['decision:weeklyAt'] || 0;
   kv['decision:weeklyAt'] = now;
   const card = (kv['paper:weekly'] || []).slice(-1)[0];
   const extra = card && now - card.at < 2 * 86400 ? scorecardLines(card) : [];
-  const message = extra.length ? `${weeklyText(d)}\n\n${extra.join('\n')}` : weeklyText(d);
+  const fresh = newCandidateLines(kv['candidates:firstSelected'], lastWeekly, (id) => candidateById[id]?.name || id);
+  const head = fresh.length ? `${weeklyText(d)}\n${fresh.join('\n')}` : weeklyText(d);
+  const message = extra.length ? `${head}\n\n${extra.join('\n')}` : head;
   await env.DB.batch([kvSetStmt(env.DB, 'decision:weeklyAt', now), eventStmt(env.DB, { t: now, kind: 'decision_weekly', strategy_id: null, message })]);
   return true;
 }

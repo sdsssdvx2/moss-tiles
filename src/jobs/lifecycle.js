@@ -8,7 +8,8 @@ import { getRuns, lifecycleAll, lifecycleStmt, backtests, equityPoints, eventStm
 import { allStrategies } from '../strategies/index.js';
 import { advanceRun } from './paper.js';
 import { INITIAL_CASH } from '../config.js';
-import { decideAll, paperRiskMatched } from '../core/decision.js';
+import { decideAll, paperRiskMatched, markFirstCandidateSelections } from '../core/decision.js';
+import { candidateById } from '../strategies/candidates.js';
 import { criteriaChange } from '../core/criteria.js';
 
 /** 모의 기록의 연 환산 흔들림(변동성). 공격 장부의 배수 계산에 쓴다. 자료가 5개 미만이면 null. */
@@ -120,7 +121,7 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
     rows.push({ id: s.id, strategy_id: s.id, family: s.family, version: s.version, stage: ev.stage, label: ev.label, summary: ev.summary, checks: ev.checks, paper_since: paperSince, promoted_t: promoted, btSharpe: bt?.holdout?.sharpe });
     if (!only) {
       facts.push({ id: s.id, name: s.name, market: s.market, cadence: s.cadence, benchmarkOnly: !!s.benchmarkOnly, researchOnly: !!s.researchOnly, simulationOnly: !!s.simulationOnly,
-        sleeve: s.sleeve || null, noBacktest: !!s.noBacktest, stage: ev.stage, growthCandidate: !!s.growthCandidate, dynamicLeverage: !!s.dynamicLeverage,
+        sleeve: s.sleeve || null, noBacktest: !!s.noBacktest, candidate: !!s.candidate, stage: ev.stage, growthCandidate: !!s.growthCandidate, dynamicLeverage: !!s.dynamicLeverage,
         bt: bt ? { dsrLab: bt.dsrLab ?? null, sharpe: bt.holdout?.sharpe ?? null, mdd: bt.holdout?.mdd ?? null } : null,
         paper: paper ? { startT: run.state.startT || null, days: paper.days, rebalances: paper.rebalances, ret: paper.totalReturn, rmRet: paperRiskMatched(paper._pts), mdd: paper.mdd, halted: !!paper.halted, vol: annualVol(paper._pts, s.market, s.timeframe) } : null });
     }
@@ -170,6 +171,10 @@ export async function lifecycleTask(env, kv, now, { only = null } = {}) {
       if (cc.entry.from) stmts.push(eventStmt(env.DB, { t: now, kind: 'decision', strategy_id: null, message: `📐 판단 기준이 바뀌었어요: ${cc.entry.text} (이번 평가부터 적용, 지난 기록은 그대로)` }));
     }
     const d = decideAll(facts, { now, prev: kv['decision:current'] || null, criteria: cc.current });
+    // 공개된 사전 등록 후보가 처음 선발되면 '🧪 새 후보 <id> 선발' (주간 결론에도 한 줄 — tick.js weeklyDecisionTask)
+    const fc = markFirstCandidateSelections(d.changes, kv['candidates:firstSelected'], (id) => !!candidateById[id], now);
+    d.changes = fc.changes;
+    if (fc.fresh.length) { kv['candidates:firstSelected'] = fc.firstSelected; stmts.push(kvSetStmt(env.DB, 'candidates:firstSelected', fc.firstSelected)); }
     const log = [...(kv['decision:log'] || []), ...d.changes].slice(-40);
     kv['decision:current'] = d; kv['decision:log'] = log;
     stmts.push(kvSetStmt(env.DB, 'decision:current', d), kvSetStmt(env.DB, 'decision:log', log));
