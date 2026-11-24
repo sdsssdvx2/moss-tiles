@@ -64,6 +64,17 @@ test('newsletter feed: both sources, newest 3 per source, old and sponsored post
   assert.ok(h.last_ok && !h.last_err);
 });
 
+test('newsletter feed: a single source failing is recorded per source (no longer silent), with the HTTP status', async () => {
+  const DB = makeD1();
+  const fetcher = async (url) => (url.includes('glassnode') ? new Response('blocked', { status: 403, headers: { 'cf-mitigated': 'challenge', server: 'cloudflare' } }) : feedFetcher()(url));
+  const items = await NL.fetch(fetcher, { DB }, NOW);
+  assert.equal(items.length, 2); // 어피티는 그대로 들어옴
+  const rows = Object.fromEntries(DB.raw.prepare("SELECT source, last_ok, last_err, err FROM data_health WHERE source LIKE 'feed:newsletter:%'").all().map((r) => [r.source, r]));
+  assert.ok(rows['feed:newsletter:uppity.co.kr'].last_ok && !rows['feed:newsletter:uppity.co.kr'].last_err);
+  assert.ok(rows['feed:newsletter:insights.glassnode.com'].last_err);
+  assert.match(rows['feed:newsletter:insights.glassnode.com'].err, /HTTP_403 cf-mitigated:challenge server:cloudflare/);
+});
+
 test('newsletter feed: one source down is fine; both down is a visible feed error', async () => {
   assert.equal((await NL.fetch(feedFetcher({ fail: ['glassnode'] }), {}, NOW)).length, 2);
   await assert.rejects(NL.fetch(feedFetcher({ fail: ['glassnode', 'uppity'] }), {}, NOW), /NEWSLETTER_ALL_FAILED/);
