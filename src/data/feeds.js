@@ -16,6 +16,49 @@ export function parseRssTitles(xml, max = 15) {
   return out;
 }
 
+// ---- 뉴스레터(2026-11-24, #F-009 ②): 무료 RSS 두 곳, 비교 장부(공시·뉴스레터 포함 AI 점수) 입력 전용 ----
+// 고른 까닭(조사 2026-11-24, 모두 로그인·구독 없이 GET 한 번): 어피티 머니레터 카테고리 피드 = 한국어 시장·거시 해설, 매일, 본문 전문
+// (약관은 상업적 사용만 막음, robots는 /wp-admin/만) / Glassnode Insights = 비트코인·이더리움 온체인 주간 해설, 전문(Ghost 표준 RSS).
+// 스티비·뉴닉·메일리는 RSS가 없고, 한국어 Substack(Bankless Korea)은 2025-02 뒤 멈춤 → 제외. 한국은행 RSS는 월 1~3건이라 제외.
+// 어피티 피드는 한 번에 약 1.4MB → 앞에서 몇 건만 읽고 끊는다(CPU·메모리).
+export const NEWSLETTER_SOURCES = Object.freeze([
+  Object.freeze({ sym: '*krx', name: '어피티 머니레터', url: 'https://uppity.co.kr/category/newsletter/feed' }),
+  Object.freeze({ sym: '*crypto', name: 'Glassnode', url: 'https://insights.glassnode.com/rss/', skip: /\+\s*Glassnode|Glassnode\s*\+|sponsored/i }), // 제휴·홍보 글('X + Glassnode') 제외
+]);
+export const NEWSLETTER_KEEP_DAYS = 14; // Glassnode는 1~3주 간격이라 2주 안의 글을 둔다
+const stripHtml = (s) => decodeXml(String(s)).replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n))).replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
+
+/** RSS 글 목록: 제목·날짜·본문 앞부분(본문은 content:encoded, 없으면 description). */
+export function parseRssItems(xml, max = 3, textMax = 600) {
+  const out = [];
+  const re = /<item>([\s\S]*?)<\/item>/g;
+  let m;
+  while ((m = re.exec(xml)) && out.length < max) {
+    const it = m[1];
+    const pick = (tag) => { const r = it.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`)); return r ? r[1] : ''; };
+    const t = Date.parse(decodeXml(pick('pubDate'))) / 1000;
+    const body = pick('content:encoded') || pick('description');
+    out.push({ title: stripHtml(pick('title')).slice(0, 150), t: Number.isFinite(t) ? Math.floor(t) : null, text: stripHtml(body).slice(0, textMax) });
+  }
+  return out;
+}
+
+/** 응답 앞부분만 읽기: </item>이 n번 나오거나 maxBytes를 넘으면 끊는다(나머지는 받지 않음). body 스트림이 없으면 text(). */
+export async function readRssHead(res, n = 3, maxBytes = 400_000) {
+  if (!res.body?.getReader) return String(await res.text()).slice(0, maxBytes);
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let s = '', bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength; s += dec.decode(value, { stream: true });
+      if (bytes >= maxBytes || (s.match(/<\/item>/g) || []).length >= n) break;
+    }
+  } finally { try { await reader.cancel(); } catch { /* already closed */ } }
+  return s;
+}
+
 // ---- 세계 지표(2026-11-18 밤) ----
 export const MACRO_SERIES = [
   { id: 'vix', y: '^VIX', ko: '미국 변동성 지수(VIX)', en: 'VIX', unit: '' },
@@ -140,6 +183,24 @@ export const FEEDS = [
         items.push({ sym: 'KRW-BTC', t: day, type: 'onchain', payload: { id: 'btc_active_addr', title: `비트코인 하루 활성 주소 ${Math.round(last7 / 1000)}천 개(7일 평균, 이전 한 달 대비 ${chg >= 0 ? '+' : ''}${(chg * 100).toFixed(0)}%)`, en: `Bitcoin daily active addresses ${Math.round(last7 / 1000)}k (7d avg, ${chg >= 0 ? '+' : ''}${(chg * 100).toFixed(0)}% vs prior month)`, value: last7, chg } });
       } catch (e) { errors.push(`blockchain:${String(e?.message || e).slice(0, 12)}`); }
       if (!items.length) throw new Error(`CRYPTO_GLOBAL_FAILED ${errors.join(',')}`.slice(0, 120));
+      return items;
+    },
+  },
+  {
+    id: 'newsletter', name: '뉴스레터(어피티 머니레터·Glassnode — 공시·뉴스레터 비교 장부에만 씀)', every: 12 * HOUR, needs: null,
+    async fetch(fetcher, env, now) {
+      const items = [], errors = [];
+      for (const src of NEWSLETTER_SOURCES) {
+        try {
+          const res = await fetcher(src.url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; family-invest-paper/2; personal non-commercial, twice a day)', accept: 'application/rss+xml, application/xml' } });
+          if (!res.ok) throw new Error(String(res.status));
+          for (const it of parseRssItems(await readRssHead(res, 3), 3)) {
+            if (!it.title || !it.t || src.skip?.test(it.title) || it.t < now - NEWSLETTER_KEEP_DAYS * DAY || it.t > now + HOUR) continue;
+            items.push({ sym: src.sym, t: it.t, type: 'newsletter', payload: { src: src.name, title: it.title, text: it.text } });
+          }
+        } catch (e) { errors.push(`${src.url.split('/')[2]}:${String(e?.message || e).slice(0, 20)}`); }
+      }
+      if (errors.length === NEWSLETTER_SOURCES.length) throw new Error(`NEWSLETTER_ALL_FAILED ${errors.join(',')}`.slice(0, 120));
       return items;
     },
   },

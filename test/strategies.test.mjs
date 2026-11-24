@@ -108,6 +108,8 @@ test('static safety: no live order capability anywhere in src/', () => {
     'api.bithumb.com', 'data-api.binance.vision', 'www.binance.com', 'api.exchange.coinbase.com', 'www.okx.com', 'open.er-api.com', 't.me', 'api.hyperliquid.xyz',
     // read-only news headline RSS (AI 판단 inputs)
     'www.yna.co.kr', 'www.hankyung.com', 'www.blockmedia.co.kr', 'www.tokenpost.kr',
+    // 뉴스레터 RSS(2026-11-24 #F-009, 공개·읽기 전용 글 목록. 주문·계정 경로 없음)
+    'uppity.co.kr', 'insights.glassnode.com',
     // 세계 지표·온체인(2026-11-18 밤, 공개·읽기 전용 시세/통계. 주문·계정 경로 없음)
     'query1.finance.yahoo.com', 'api.frankfurter.dev', 'api.coingecko.com', 'api.blockchain.info']);
   for (const h of fetchHosts) assert.ok(allowed.has(h), `unexpected host ${h}`);
