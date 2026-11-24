@@ -23,18 +23,19 @@ const barClose = (s, t) => (s.timeframe === '1h' ? t + HOUR : s.market === 'krx'
 /** Per-bar signal view (as of the bar's close, max 2 days old) for overlay strategies. Paper mode only. */
 export async function signalsFor(env, strategy, from, toT) {
   if (!strategy.overlayOf && !strategy.usesSignals) return undefined;
-  const { results } = await env.DB.prepare("SELECT sym, t, kind, value, note FROM signals WHERE t >= ? AND t <= ? AND kind IN ('news_veto', 'ai_score', 'ai_score_disc') ORDER BY t")
+  const { results } = await env.DB.prepare("SELECT sym, t, kind, value, note FROM signals WHERE t >= ? AND t <= ? AND kind IN ('news_veto', 'ai_score', 'ai_score_disc', 'ai_score_nl') ORDER BY t")
     .bind(from - 3 * DAY, barClose(strategy, toT)).all();
   const vetoRequired = String(env.NEWS_VETO_PROVIDER || 'none') !== 'none';
   const aiRequired = aiConfigured(env);
   return (t) => {
     const close = barClose(strategy, t);
     const fresh = results.filter((r) => r.t <= close && r.t > close - 2 * DAY);
-    const out = { vetoRequired, aiRequired, ai: {}, aiDisc: {} };
+    const out = { vetoRequired, aiRequired, ai: {}, aiDisc: {}, aiNl: {} };
     for (const r of fresh) {
       if (r.kind === 'news_veto' && r.sym === `*${strategy.market}`) out.veto = { value: r.value, note: r.note };
       if (r.kind === 'ai_score') out.ai[r.sym] = { score: r.value, reason: r.note };
       if (r.kind === 'ai_score_disc') out.aiDisc[r.sym] = { score: r.value, reason: r.note };
+      if (r.kind === 'ai_score_nl') out.aiNl[r.sym] = { score: r.value, reason: r.note };
     }
     return out;
   };
