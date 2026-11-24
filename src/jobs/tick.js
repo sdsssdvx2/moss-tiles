@@ -14,11 +14,24 @@ import { kvSetStmt, eventStmt, getRuns, lifecycleAll } from '../db/store.js';
 import { allStrategies } from '../strategies/index.js';
 import { buildScorecard, appendScorecard, scorecardLines } from '../core/scorecard.js';
 import { selfCheckTask } from './selfcheck.js';
+import { meteredDB, readsToday, mergeReads, topTasks, D1_READ_SOFT, D1_READ_HARD } from '../db/meter.js';
+
+/** 오늘 읽은 행이 문턱을 넘으면 쉬는 일(덜 급한 것부터). soft: 과거 재검증·과거 채우기·비교 AI·연구 가져오기 / hard: + 평가·배분. */
+export const D1_SKIP_SOFT = Object.freeze(['krxBackfill', 'krxNavBackfill', 'cryptoBackfill1d', 'cryptoBackfill1h', 'aidisc', 'research', 'workerBacktest']);
+export const D1_SKIP_HARD = Object.freeze([...D1_SKIP_SOFT, 'lifecycle', 'allocate']);
 
 export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher = fetch } = {}) {
+  // 2026-11-24 #F-010: 이 틱이 D1에서 읽은 행을 작업별로 센다(kv 'd1:reads', UTC 하루). 무료 읽기 한도는 계정 전체라 넘으면 다른 사이트도 멈춤.
+  const meter = { total: 0, byTask: {}, cur: 'kvAll' };
+  env = { ...env, DB: meteredDB(env.DB, meter) };
   const kv = await kvAll(env.DB);
+  const readsSoFar = readsToday(kv, now);
+  const soft = readsSoFar >= Number(env.D1_READ_SOFT || D1_READ_SOFT), hard = readsSoFar >= Number(env.D1_READ_HARD || D1_READ_HARD);
+  const skip = new Set(hard ? D1_SKIP_HARD : soft ? D1_SKIP_SOFT : []);
   const log = [];
   const run = async (name, fn) => {
+    if (skip.has(name)) return false;
+    meter.cur = name;
     try { const r = await fn(); if (r) log.push(name); return r; } catch (e) { log.push(`${name}:ERR:${String(e?.message || e).slice(0, 80)}`); return false; }
   };
   let data = 0;
@@ -56,7 +69,23 @@ export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher =
   await run('scorecard', () => weeklyScorecardTask(env, kv, now));
   await run('weekly', () => weeklyDecisionTask(env, kv, now));
   await run('selfcheck', () => selfCheckTask(env, kv, now));
+  // 문턱을 처음 넘은 날 한 번: 텔레그램 한 줄(즉시 알림 분류) — 알림을 보내기 전에 쌓아 같은 틱에 나가게
+  if (soft && !kv['d1:reads']?.warned) {
+    meter.cur = 'meter';
+    try {
+      const top = Object.entries(topTasks(kv['d1:reads']?.byTask, 3)).map(([k, v]) => `${k} ${Math.round(v / 10000)}만`).join(', ');
+      await eventStmt(env.DB, { t: now, kind: 'self_check', strategy_id: null, message: `⚠️ D1 읽기 오늘(UTC) ${Math.round(readsSoFar / 10000)}만 행 — 계정 무료 한도(하루 500만, 다른 사이트와 같이 씀)를 지키려고 ${hard ? '평가·배분까지' : '덜 급한 일(과거 재검증·과거 채우기·비교 AI)을'} 오늘 쉽니다. 많이 읽은 곳: ${top || '-'}` }).run();
+      kv['d1:reads'] = { ...kv['d1:reads'], warned: now };
+    } catch (_) { /* 경고 실패는 틱을 막지 않음 */ }
+  }
   await run('notify', () => notifyPending(env, { fetcher, kv, now }));
+  meter.cur = 'meter';
+  try {
+    const m = mergeReads(kv['d1:reads'], kv['d1:reads:hist'], meter, now);
+    kv['d1:reads'] = m.reads;
+    await env.DB.batch([kvSetStmt(env.DB, 'd1:reads', m.reads), ...(m.hist ? [kvSetStmt(env.DB, 'd1:reads:hist', m.hist)] : [])]);
+    if (m.hist) kv['d1:reads:hist'] = m.hist;
+  } catch (_) { /* 계량 기록 실패는 틱을 막지 않음 */ }
   return log;
 }
 
