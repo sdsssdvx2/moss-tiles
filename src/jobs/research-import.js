@@ -26,7 +26,7 @@ export async function importResearch(env, body) {
   if (addedCandidates) stmts.push(kvSetStmt(env.DB, 'candidates:released', released));
   if (body?.candidateStatus && typeof body.candidateStatus === 'object') {
     const st = {};
-    for (const [id, v] of Object.entries(body.candidateStatus).slice(0, 20)) if (candidateById[id]) st[id] = { status: String(v?.status || '').slice(0, 20), note: String(v?.note || '').slice(0, 200), at: Number(v?.at) | 0 };
+    for (const [id, v] of Object.entries(body.candidateStatus).slice(0, 40)) if (candidateById[id]) st[id] = { status: String(v?.status || '').slice(0, 20), note: String(v?.note || '').slice(0, 200), at: Number(v?.at) | 0 };
     // 미통과·자료 부족도 12-15 뒤 사람이 보게: 상태가 바뀐 주에만 이벤트 한 줄(텔레그램 요약으로 나감). 통과는 위에서 따로.
     const prev = kv['candidates:status'] || {};
     const word = { rejected: '과거 검증 미통과(다시 고르지 않음, 시도 수에는 남음)', no_data: '자료 부족 — 다음 주 다시 봄' };

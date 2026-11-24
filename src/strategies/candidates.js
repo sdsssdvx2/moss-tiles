@@ -234,7 +234,115 @@ export const etfAbsMom3V1 = {
 };
 
 export const CANDIDATES = [etfGoldTrendV1, etfQualityLowvolV1, etfAllweatherV1, etfDevTrendV1, etfStockBondTrendV1, etfInvVol3V1, etfPermanentV1, etfAbsMom3V1];
-export const candidateById = Object.fromEntries(CANDIDATES.map((s) => [s.id, s]));
+
+// ---------------- 3차 사전 등록: 규칙 문법 순서표 (2026-11-24 #F-009 ③, 결과 보기 전) ----------------
+// 12-15 뒤 새 후보를 '코드를 새로 쓰지 않고' 공급하려고, 이미 쓰는 부품 4개(추세 거름·상대 모멘텀·변동성 역수·고정 비율)와
+// 10년 넘는 자료가 있는 종목 묶음 6개의 조합을 순서표로 고정한다. 앞 8개 후보와 사실상 같은 조합 4개는 뺐다(20개).
+// 공개는 2027-03-20부터 2주 간격(앞 대기열 끝 03-06 다음). 판정은 앞 후보와 똑같이 한 번, 판정마다 연구실 시도 수 +1.
+// 숫자(200일 평균·126일 모멘텀·60일 변동성·합계 60%·종목 30%)는 모두 앞 후보·기존 전략에서 쓰는 값 그대로 — 새로 고른 숫자가 없다.
+// 이 표는 결과를 보기 전에 고정했다: 바꾸려면 새 이름(v2)·새 시도. backtest/CANDIDATES-PREREG.md '3차'.
+export const GRAMMAR_SETS = Object.freeze({
+  stockbond: ['069500', '148070'],
+  stockgold: ['069500', '132030'],
+  sbg3: ['069500', '148070', '132030'],
+  lowvoldiv: ['174350', '161510', '148070'],
+  kdevgold: ['069500', '251350', '132030'],
+  kdevbg4: ['069500', '251350', '148070', '132030'],
+});
+const SET_KO = { stockbond: '국내주식·국고채', stockgold: '국내주식·금', sbg3: '국내주식·국고채·금', lowvoldiv: '로우볼·고배당·국고채', kdevgold: '국내주식·선진국·금', kdevbg4: '국내주식·선진국·국고채·금' };
+export const GRAMMAR_METHODS = Object.freeze(['trend', 'mom', 'ivol', 'fixq']);
+const METHOD_KO = { trend: '각각 200일선 추세 (매월)', mom: '6개월 상대 모멘텀 상위 + 단기채권 비교 (매월)', ivol: '200일선 위 종목만 변동성 역수 비중 (매월)', fixq: '같은 비율 고정 (분기)' };
+// 순서표(바꾸지 않음): [방법, 묶음] — 방법·묶음이 번갈아 나오게 미리 정한 순서
+export const GRAMMAR_ORDER = Object.freeze([
+  ['trend', 'stockgold'], ['mom', 'lowvoldiv'], ['ivol', 'kdevgold'], ['fixq', 'kdevbg4'], ['mom', 'stockbond'],
+  ['ivol', 'stockgold'], ['trend', 'lowvoldiv'], ['fixq', 'kdevgold'], ['mom', 'kdevbg4'], ['trend', 'sbg3'],
+  ['ivol', 'stockbond'], ['fixq', 'stockgold'], ['ivol', 'lowvoldiv'], ['trend', 'kdevgold'], ['ivol', 'kdevbg4'],
+  ['fixq', 'stockbond'], ['mom', 'stockgold'], ['fixq', 'lowvoldiv'], ['mom', 'kdevgold'], ['trend', 'kdevbg4'],
+]);
+export const GRAMMAR_FIRST_RELEASE = '2027-03-20';
+const GP = Object.freeze({ sma: 200, momN: 126, volN: 60, total: 0.60, cap: 0.30 });
+const addDays = (ymd, n) => new Date(Date.parse(`${ymd}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+const quarterly = (ctx) => !(quarterOf(ctx.t) === ctx.mem.q && ctx.barIndex > 0);
+
+/** 상대 모멘텀: 최근 momN일 수익 상위 k개(묶음 크기 2면 1개, 그 밖 2개), 그중 단기채권 수익보다 높은 것만 각 min(30%, 60%/k). 나머지 몫은 단기채권(30% 상한). */
+function momBook(ctx, syms, p) {
+  const k = syms.length <= 2 ? 1 : 2, w = Math.min(p.cap, p.total / k);
+  const bc = ctx.closes(BOND, p.momN + 1);
+  const rb = bc.length > p.momN ? roc(bc, p.momN) : 0;
+  const ranked = [], targets = {}, reasons = {};
+  for (const sym of syms) {
+    const c = ctx.closes(sym, p.momN + 1);
+    if (c.length <= p.momN) { reasons[sym] = `${symName(sym)}: 6개월 수익을 낼 자료가 아직 모자라 쉼`; continue; }
+    ranked.push({ sym, r: roc(c, p.momN) });
+  }
+  ranked.sort((a, b) => b.r - a.r || (a.sym < b.sym ? -1 : 1));
+  let eq = 0;
+  for (const [i, x] of ranked.entries()) {
+    if (i < k && x.r > rb) { targets[x.sym] = w; eq += w; reasons[x.sym] = `${symName(x.sym)}: 6개월 수익 ${Math.round(x.r * 100)}% (상위 ${i + 1}위, 단기채권 ${Math.round(rb * 100)}%보다 높음) → ${Math.round(w * 100)}%`; }
+    else reasons[x.sym] = `${symName(x.sym)}: 6개월 수익 ${Math.round(x.r * 100)}% → ${i < k ? '단기채권보다 낮아 이 몫은 단기채권으로' : `상위 ${k}개 밖`}`;
+  }
+  const bond = Math.min(p.cap, k * w - eq);
+  if (bond > 0.02) { targets[BOND] = bond; reasons[BOND] = '고르지 못한 몫은 단기채권 ETF에 보관 (현금 대용)'; }
+  return { targets, reasons, mem: { month: monthOf(ctx.t) } };
+}
+/** 변동성 역수(200일 평균 위 종목만): 합계 60% 중 거른 종목 몫만큼만 나눠 든다(종목 30% 상한). 나머지는 단기채권(30% 상한). */
+function ivolBook(ctx, syms, p) {
+  const ok = [], targets = {}, reasons = {};
+  for (const sym of syms) {
+    const c = ctx.closes(sym, p.sma + 1);
+    const v = realizedVol(ctx.closes(sym, p.volN + 2), p.volN, 252);
+    if (c.length < p.sma || !(Number.isFinite(v) && v > 0)) { reasons[sym] = `${symName(sym)}: 200일 평균·변동성을 낼 자료가 아직 모자라 이 몫은 단기채권으로`; continue; }
+    if (c[c.length - 1] > sma(c, p.sma)) ok.push({ sym, v });
+    else reasons[sym] = `${symName(sym)}: 200일 평균 아래 → 이 몫은 단기채권으로`;
+  }
+  const inv = ok.reduce((a, x) => a + 1 / x.v, 0), avail = p.total * (ok.length / syms.length);
+  let eq = 0;
+  for (const x of ok) {
+    const w = Math.min(p.cap, (avail * (1 / x.v)) / inv);
+    targets[x.sym] = w; eq += w;
+    reasons[x.sym] = `${symName(x.sym)}: 200일 평균 위, 최근 변동성 연 ${Math.round(x.v * 100)}% → 비중 ${Math.round(w * 100)}% (변동성 역수)`;
+  }
+  bondFill(targets, reasons, eq);
+  return { targets, reasons, mem: { month: monthOf(ctx.t) } };
+}
+/** 같은 비율 고정(분기 첫 거래일): 종목마다 min(30%, 60%/n), 자료 없는 종목 몫은 단기채권(30% 상한). 타이밍 없음. */
+function fixBook(ctx, syms, p) {
+  const w = Math.min(p.cap, p.total / syms.length), targets = {}, reasons = {};
+  let eq = 0;
+  for (const sym of syms) {
+    if (ctx.closes(sym, 1).length) { targets[sym] = w; eq += w; reasons[sym] = `${symName(sym)}: 고정 비율 ${Math.round(w * 100)}% (분기 조정)`; }
+    else reasons[sym] = `${symName(sym)}: 아직 시세 자료가 없어 이 몫은 단기채권으로`;
+  }
+  bondFill(targets, reasons, eq);
+  return { targets, reasons, mem: { q: quarterOf(ctx.t) } };
+}
+function grammarCandidate([method, set], i) {
+  const syms = GRAMMAR_SETS[set];
+  const id = `gen_${method}_${set}_v1`;
+  const n = syms.length, wEach = Math.round(Math.min(GP.cap, GP.total / n) * 100);
+  const desc = {
+    trend: `매월 첫 거래일에 ${syms.map(symName).join('·')} 각각 가격이 200일 평균 위면 ${wEach}%, 아래면 그 몫을 단기채권 ETF로.`,
+    mom: `매월 첫 거래일에 ${syms.map(symName).join('·')} 중 최근 6개월(126거래일) 수익이 높은 ${n <= 2 ? 1 : 2}개를 고르고, 그 수익이 단기채권보다 높을 때만 든다. 나머지 몫은 단기채권 ETF로.`,
+    ivol: `매월 첫 거래일에 ${syms.map(symName).join('·')} 중 200일 평균 위인 것만 최근 60거래일 변동성의 역수 비율로 나눠 든다(합계 최대 60%, 한 종목 30%). 나머지 몫은 단기채권 ETF로.`,
+    fixq: `타이밍 없이 ${syms.map(symName).join('·')}를 ${wEach}%씩 들고 분기 첫 거래일에 비율을 다시 맞춘다. 남는 몫은 단기채권 ETF로.`,
+  }[method];
+  const book = { trend: (ctx) => trendBook(ctx, syms, { sma: GP.sma, weight: Math.min(GP.cap, GP.total / n) }), mom: (ctx) => momBook(ctx, syms, GP), ivol: (ctx) => ivolBook(ctx, syms, GP), fixq: (ctx) => fixBook(ctx, syms, GP) }[method];
+  return {
+    id, family: id.replace(/_v1$/, ''), version: 1, cadence: 'slow', priorTrials: 0,
+    releaseDate: addDays(GRAMMAR_FIRST_RELEASE, 14 * i), candidate: true, grammar: { method, set, order: i + 1 },
+    name: `후보: ${SET_KO[set]} ${METHOD_KO[method]}`, market: 'krx', timeframe: '1d',
+    universe: [...syms, BOND], benchSym: syms[0],
+    params: { ...GP }, grid: null,
+    lookback: { trend: 230, mom: 136, ivol: 230, fixq: 20 }[method],
+    risk: ETF_RISK,
+    description: `${desc} (2026-11-24 규칙 문법 순서표 ${i + 1}번 — 코드 새로 안 씀, 숫자는 앞 후보와 같음)`,
+    decide(ctx) { return (method === 'fixq' ? quarterly(ctx) : monthly(ctx)) ? book(ctx) : null; },
+  };
+}
+export const GRAMMAR_CANDIDATES = GRAMMAR_ORDER.map(grammarCandidate);
+/** 대기열 전체(앞 8개 + 순서표 20개). 판정·공개·Worker 등록은 모두 이 목록으로. */
+export const ALL_CANDIDATES = [...CANDIDATES, ...GRAMMAR_CANDIDATES];
+export const candidateById = Object.fromEntries(ALL_CANDIDATES.map((s) => [s.id, s]));
 
 /** KST 자정 기준 공개 시각(unix 초). releaseDate 'YYYY-MM-DD' 는 한국 날짜. */
 export const releaseAt = (s) => Date.parse(`${s.releaseDate}T00:00:00+09:00`) / 1000;
