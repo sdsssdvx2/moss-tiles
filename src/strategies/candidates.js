@@ -235,13 +235,13 @@ export const etfAbsMom3V1 = {
 
 export const CANDIDATES = [etfGoldTrendV1, etfQualityLowvolV1, etfAllweatherV1, etfDevTrendV1, etfStockBondTrendV1, etfInvVol3V1, etfPermanentV1, etfAbsMom3V1];
 
-// ---------------- 3차 사전 등록: 규칙 문법 순서표 (2026-11-24 #F-009 ③, 결과 보기 전) ----------------
-// 12-15 뒤 새 후보를 '코드를 새로 쓰지 않고' 공급하려고, 이미 쓰는 부품 4개(추세 거름·상대 모멘텀·변동성 역수·고정 비율)와
-// 10년 넘는 자료가 있는 종목 묶음 6개의 조합을 순서표로 고정한다. 앞 8개 후보와 사실상 같은 조합 4개는 뺐다(20개).
-// 공개는 2027-03-20부터 2주 간격(앞 대기열 끝 03-06 다음). 판정은 앞 후보와 똑같이 한 번, 판정마다 연구실 시도 수 +1.
-// 숫자(200일 평균·126일 모멘텀·60일 변동성·합계 60%·종목 30%)는 모두 앞 후보·기존 전략에서 쓰는 값 그대로 — 새로 고른 숫자가 없다.
-// 이 표는 결과를 보기 전에 고정했다: 바꾸려면 새 이름(v2)·새 시도. backtest/CANDIDATES-PREREG.md '3차'.
-export const GRAMMAR_SETS = Object.freeze({
+// ---------------- 3차 사전 등록: 규칙 부품 조합 순서표 (2026-11-24 #F-009 ③, 결과 보기 전) ----------------
+// 12-15 뒤 새 후보를 '전략 코드를 새로 쓰지 않고' 공급하려고, 부품 3개(각각 200일선 추세·6개월 상대 모멘텀·200일선 거른 변동성 역수)와
+// 종목 묶음 6개의 조합을 순서표로 고정한다(15개). 공개는 2027-03-20부터 2주 간격(앞 대기열 끝 03-06 다음). 판정은 앞 후보와 똑같이 한 번,
+// 판정마다 연구실 시도 수 +1. 새로 정한 설계(126일, 상위 k개, 60%/n 비중, 거른 뒤 변동성 역수, 뺀 조합)는 PREREG '3차'에 그대로 적었다.
+// 이 표는 결과를 보기 전에 고정했다: 바꾸려면 새 이름(v2)·새 시도. 지문 시험(test/candidates-grammar-20261124)이 표·부품 코드가 바뀌면 깨진다.
+const deepFreeze = (o) => { for (const v of Object.values(o)) if (v && typeof v === 'object') deepFreeze(v); return Object.freeze(o); };
+export const GRAMMAR_SETS = deepFreeze({
   stockbond: ['069500', '148070'],
   stockgold: ['069500', '132030'],
   sbg3: ['069500', '148070', '132030'],
@@ -249,22 +249,23 @@ export const GRAMMAR_SETS = Object.freeze({
   kdevgold: ['069500', '251350', '132030'],
   kdevbg4: ['069500', '251350', '148070', '132030'],
 });
+// 기준 종목 = 묶음에서 자료가 가장 짧은 종목(10년 관문·시간축이 그 종목으로 재지게 — 11-24 레드팀 5: 251350은 2016-08 상장)
+const GRAMMAR_BENCH = Object.freeze({ kdevgold: '251350', kdevbg4: '251350' });
 const SET_KO = { stockbond: '국내주식·국고채', stockgold: '국내주식·금', sbg3: '국내주식·국고채·금', lowvoldiv: '로우볼·고배당·국고채', kdevgold: '국내주식·선진국·금', kdevbg4: '국내주식·선진국·국고채·금' };
-export const GRAMMAR_METHODS = Object.freeze(['trend', 'mom', 'ivol', 'fixq']);
-const METHOD_KO = { trend: '각각 200일선 추세 (매월)', mom: '6개월 상대 모멘텀 상위 + 단기채권 비교 (매월)', ivol: '200일선 위 종목만 변동성 역수 비중 (매월)', fixq: '같은 비율 고정 (분기)' };
-// 순서표(바꾸지 않음): [방법, 묶음] — 방법·묶음이 번갈아 나오게 미리 정한 순서
-export const GRAMMAR_ORDER = Object.freeze([
-  ['trend', 'stockgold'], ['mom', 'lowvoldiv'], ['ivol', 'kdevgold'], ['fixq', 'kdevbg4'], ['mom', 'stockbond'],
-  ['ivol', 'stockgold'], ['trend', 'lowvoldiv'], ['fixq', 'kdevgold'], ['mom', 'kdevbg4'], ['trend', 'sbg3'],
-  ['ivol', 'stockbond'], ['fixq', 'stockgold'], ['ivol', 'lowvoldiv'], ['trend', 'kdevgold'], ['ivol', 'kdevbg4'],
-  ['fixq', 'stockbond'], ['mom', 'stockgold'], ['fixq', 'lowvoldiv'], ['mom', 'kdevgold'], ['trend', 'kdevbg4'],
+export const GRAMMAR_METHODS = Object.freeze(['trend', 'mom', 'ivol']);
+const METHOD_KO = { trend: '각각 200일선 추세 (매월)', mom: '6개월 상대 모멘텀 상위 + 단기채권 비교 (매월)', ivol: '200일선 위 종목만 변동성 역수 비중 (매월)' };
+// 순서표(바꾸지 않음): [방법, 묶음] — 방법·묶음이 번갈아 나오게 미리 정한 순서. 11-24 16시 레드팀 4: 고정 비율(분기)은 체결이 해마다
+// 1~2번뿐이라 거래 수 관문(30회)·모의 조정 12회를 구조적으로 못 채움 → 판정해도 시도 수만 늘리므로 부품째 뺐다(판정 0회일 때).
+export const GRAMMAR_ORDER = deepFreeze([
+  ['trend', 'stockgold'], ['mom', 'lowvoldiv'], ['ivol', 'kdevgold'], ['mom', 'stockbond'], ['ivol', 'stockgold'],
+  ['trend', 'lowvoldiv'], ['mom', 'kdevbg4'], ['trend', 'sbg3'], ['ivol', 'stockbond'], ['ivol', 'lowvoldiv'],
+  ['trend', 'kdevgold'], ['ivol', 'kdevbg4'], ['mom', 'stockgold'], ['mom', 'kdevgold'], ['trend', 'kdevbg4'],
 ]);
 export const GRAMMAR_FIRST_RELEASE = '2027-03-20';
 const GP = Object.freeze({ sma: 200, momN: 126, volN: 60, total: 0.60, cap: 0.30 });
 const addDays = (ymd, n) => new Date(Date.parse(`${ymd}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
-const quarterly = (ctx) => !(quarterOf(ctx.t) === ctx.mem.q && ctx.barIndex > 0);
 
-/** 상대 모멘텀: 최근 momN일 수익 상위 k개(묶음 크기 2면 1개, 그 밖 2개), 그중 단기채권 수익보다 높은 것만 각 min(30%, 60%/k). 나머지 몫은 단기채권(30% 상한). */
+/** 상대 모멘텀: 최근 momN일 수익 상위 k개(묶음 크기 2면 1개, 그 밖 2개), 그중 단기채권 수익보다 높은 것만 각 min(30%, 60%/k). 쉬는 몫은 단기채권(다른 부품과 같은 bondFill, 30% 상한). */
 function momBook(ctx, syms, p) {
   const k = syms.length <= 2 ? 1 : 2, w = Math.min(p.cap, p.total / k);
   const bc = ctx.closes(BOND, p.momN + 1);
@@ -281,8 +282,7 @@ function momBook(ctx, syms, p) {
     if (i < k && x.r > rb) { targets[x.sym] = w; eq += w; reasons[x.sym] = `${symName(x.sym)}: 6개월 수익 ${Math.round(x.r * 100)}% (상위 ${i + 1}위, 단기채권 ${Math.round(rb * 100)}%보다 높음) → ${Math.round(w * 100)}%`; }
     else reasons[x.sym] = `${symName(x.sym)}: 6개월 수익 ${Math.round(x.r * 100)}% → ${i < k ? '단기채권보다 낮아 이 몫은 단기채권으로' : `상위 ${k}개 밖`}`;
   }
-  const bond = Math.min(p.cap, k * w - eq);
-  if (bond > 0.02) { targets[BOND] = bond; reasons[BOND] = '고르지 못한 몫은 단기채권 ETF에 보관 (현금 대용)'; }
+  bondFill(targets, reasons, eq, '고르지 못한·쉬는 몫은 단기채권 ETF에 보관 (현금 대용)');
   return { targets, reasons, mem: { month: monthOf(ctx.t) } };
 }
 /** 변동성 역수(200일 평균 위 종목만): 합계 60% 중 거른 종목 몫만큼만 나눠 든다(종목 30% 상한). 나머지는 단기채권(30% 상한). */
@@ -305,17 +305,6 @@ function ivolBook(ctx, syms, p) {
   bondFill(targets, reasons, eq);
   return { targets, reasons, mem: { month: monthOf(ctx.t) } };
 }
-/** 같은 비율 고정(분기 첫 거래일): 종목마다 min(30%, 60%/n), 자료 없는 종목 몫은 단기채권(30% 상한). 타이밍 없음. */
-function fixBook(ctx, syms, p) {
-  const w = Math.min(p.cap, p.total / syms.length), targets = {}, reasons = {};
-  let eq = 0;
-  for (const sym of syms) {
-    if (ctx.closes(sym, 1).length) { targets[sym] = w; eq += w; reasons[sym] = `${symName(sym)}: 고정 비율 ${Math.round(w * 100)}% (분기 조정)`; }
-    else reasons[sym] = `${symName(sym)}: 아직 시세 자료가 없어 이 몫은 단기채권으로`;
-  }
-  bondFill(targets, reasons, eq);
-  return { targets, reasons, mem: { q: quarterOf(ctx.t) } };
-}
 function grammarCandidate([method, set], i) {
   const syms = GRAMMAR_SETS[set];
   const id = `gen_${method}_${set}_v1`;
@@ -324,23 +313,24 @@ function grammarCandidate([method, set], i) {
     trend: `매월 첫 거래일에 ${syms.map(symName).join('·')} 각각 가격이 200일 평균 위면 ${wEach}%, 아래면 그 몫을 단기채권 ETF로.`,
     mom: `매월 첫 거래일에 ${syms.map(symName).join('·')} 중 최근 6개월(126거래일) 수익이 높은 ${n <= 2 ? 1 : 2}개를 고르고, 그 수익이 단기채권보다 높을 때만 든다. 나머지 몫은 단기채권 ETF로.`,
     ivol: `매월 첫 거래일에 ${syms.map(symName).join('·')} 중 200일 평균 위인 것만 최근 60거래일 변동성의 역수 비율로 나눠 든다(합계 최대 60%, 한 종목 30%). 나머지 몫은 단기채권 ETF로.`,
-    fixq: `타이밍 없이 ${syms.map(symName).join('·')}를 ${wEach}%씩 들고 분기 첫 거래일에 비율을 다시 맞춘다. 남는 몫은 단기채권 ETF로.`,
   }[method];
-  const book = { trend: (ctx) => trendBook(ctx, syms, { sma: GP.sma, weight: Math.min(GP.cap, GP.total / n) }), mom: (ctx) => momBook(ctx, syms, GP), ivol: (ctx) => ivolBook(ctx, syms, GP), fixq: (ctx) => fixBook(ctx, syms, GP) }[method];
+  const book = { trend: (ctx) => trendBook(ctx, syms, { sma: GP.sma, weight: Math.min(GP.cap, GP.total / n) }), mom: (ctx) => momBook(ctx, syms, GP), ivol: (ctx) => ivolBook(ctx, syms, GP) }[method];
   return {
     id, family: id.replace(/_v1$/, ''), version: 1, cadence: 'slow', priorTrials: 0,
     releaseDate: addDays(GRAMMAR_FIRST_RELEASE, 14 * i), candidate: true, grammar: { method, set, order: i + 1 },
     name: `후보: ${SET_KO[set]} ${METHOD_KO[method]}`, market: 'krx', timeframe: '1d',
-    universe: [...syms, BOND], benchSym: syms[0],
+    universe: [...syms, BOND], benchSym: GRAMMAR_BENCH[set] || syms[0],
     params: { ...GP }, grid: null,
-    lookback: { trend: 230, mom: 136, ivol: 230, fixq: 20 }[method],
+    lookback: { trend: 230, mom: 136, ivol: 230 }[method],
     risk: ETF_RISK,
-    description: `${desc} (2026-11-24 규칙 문법 순서표 ${i + 1}번 — 코드 새로 안 씀, 숫자는 앞 후보와 같음)`,
-    decide(ctx) { return (method === 'fixq' ? quarterly(ctx) : monthly(ctx)) ? book(ctx) : null; },
+    description: `${desc} (2026-11-24 규칙 부품 조합 순서표 ${i + 1}번 — 전략 코드를 새로 쓰지 않은 사전 등록)`,
+    decide(ctx) { return monthly(ctx) ? book(ctx) : null; },
   };
 }
 export const GRAMMAR_CANDIDATES = GRAMMAR_ORDER.map(grammarCandidate);
-/** 대기열 전체(앞 8개 + 순서표 20개). 판정·공개·Worker 등록은 모두 이 목록으로. */
+/** 지문 시험용: 순서표 후보가 쓰는 부품 코드(앞 2차 후보와 공유하는 trendBook·bondFill·monthly 포함). 바뀌면 지문이 깨진다. */
+export const GRAMMAR_PARTS_SOURCE = [trendBook, momBook, ivolBook, grammarCandidate].map(String).join('\n') + String(bondFill) + String(monthly) + JSON.stringify({ GRAMMAR_SETS, GRAMMAR_ORDER, GP, GRAMMAR_BENCH, GRAMMAR_FIRST_RELEASE });
+/** 대기열 전체(앞 8개 + 순서표 15개). 판정·공개·Worker 등록은 모두 이 목록으로. */
 export const ALL_CANDIDATES = [...CANDIDATES, ...GRAMMAR_CANDIDATES];
 export const candidateById = Object.fromEntries(ALL_CANDIDATES.map((s) => [s.id, s]));
 

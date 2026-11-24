@@ -16,9 +16,11 @@ export async function importResearch(env, body) {
   const nowSec = Math.floor(Date.now() / 1000);
   const released = Array.isArray(kv['candidates:released']) ? [...kv['candidates:released']] : [];
   let addedCandidates = 0;
-  for (const c of (Array.isArray(body?.candidates) ? body.candidates : []).slice(0, 10)) {
+  // 실행기는 지금까지 통과한 후보 전체를 누적으로 보낸다 → 이미 받은 것은 건너뛰고 '새로 받는 것'만 한 번에 10개까지(11-24 레드팀 1: 앞 10개만 보던 것)
+  for (const c of (Array.isArray(body?.candidates) ? body.candidates : []).slice(0, 60)) {
     const s = candidateById[c?.id];
     if (!s || known.has(s.id) || releaseAt(s) > nowSec) continue;
+    if (addedCandidates >= 10) break;
     released.push({ id: s.id, releasedAt: nowSec });
     known.add(s.id); addedCandidates++;
     stmts.push(env.DB.prepare('INSERT INTO events (t, kind, strategy_id, message, notified) VALUES (?,?,?,?,0)').bind(nowSec, 'stage', s.id, `🧪 사전 등록 후보 ${s.name} 공개 — 과거 검증(시도 수 보정) 통과, 오늘부터 가상 돈 모의 검증 시작`));
