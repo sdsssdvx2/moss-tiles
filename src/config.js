@@ -9,6 +9,20 @@ export const KRX_ETFS = {
 };
 
 /**
+ * 사전 등록 후보(backtest/CANDIDATES-PREREG.md, 2026-11-23 고정)가 쓸 새 ETF. 공개 날짜 전에 자료만 미리 쌓는다.
+ * 기존 장부는 이 종목을 쓰지 않고, 수집 진행 조건(ready:krx:1d)에도 넣지 않는다(collect.js coreKrxCodes) —
+ * 새 종목 수집이 실패해도 기존 장부가 멈추지 않게.
+ */
+export const CANDIDATE_ETFS = {
+  '174350': 'TIGER 로우볼',
+  '161510': 'PLUS 고배당주',
+  '279530': 'KODEX 고배당주',
+  '148070': 'KIWOOM 국고채10년',
+  '132030': 'KODEX 골드선물(H)',
+  '251350': 'KODEX MSCI선진국',
+};
+
+/**
  * Cash substitutes (parking places for idle money). Overlay books (AI 판단 / 뉴스 거부권) must not
  * shrink or block moves INTO these: that would turn the A/B twin into "less bond, more raw cash"
  * instead of "fewer risky buys". Effective from the 2026-11-20 bar so already stored paper fills
@@ -30,7 +44,7 @@ export const RULES_20261118_FROM = Date.UTC(2026, 10, 23) / 1000; // 2026-11-23 
  * 정확한 과세표준은 min(매매차익, 과표기준가 증가분)이라 실제 세금은 이 근사보다 같거나 적다(보수적 근사).
  * 국내주식형 ETF(069500·102110·278530)는 매매차익 비과세, ETF 매도는 증권거래세 면제(분배금 15.4%는 TR이라 미반영).
  */
-export const ETF_GAIN_TAXED = new Set(['379800', '153130']);
+export const ETF_GAIN_TAXED = new Set(['379800', '153130', '148070', '132030', '251350']); // 뒤 셋: 후보용(채권·금 선물·해외주식형)
 
 export const KRX_STOCKS = {
   '005930': '삼성전자',
@@ -63,8 +77,8 @@ export const ETF_NAV_UNIVERSE = [...new Set([
   ...Object.keys(KRX_ETFS),
 ])];
 
-export const KRX_ALL = { ...KRX_ETFS, ...KRX_STOCKS };
-export const krxMeta = Object.fromEntries(Object.keys(KRX_ALL).map((s) => [s, { etf: s in KRX_ETFS, name: KRX_ALL[s], gainTax: ETF_GAIN_TAXED.has(s) }]));
+export const KRX_ALL = { ...KRX_ETFS, ...KRX_STOCKS, ...CANDIDATE_ETFS };
+export const krxMeta = Object.fromEntries(Object.keys(KRX_ALL).map((s) => [s, { etf: s in KRX_ETFS || s in CANDIDATE_ETFS, name: KRX_ALL[s], gainTax: ETF_GAIN_TAXED.has(s) }]));
 
 // Core long-lived Upbit KRW markets. The live collector adds the current top-volume
 // markets (up to CRYPTO_MAX) on top of BTC/ETH; stablecoins and 유의종목 are excluded.

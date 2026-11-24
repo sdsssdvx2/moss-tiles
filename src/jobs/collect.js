@@ -5,13 +5,19 @@ import { DAY, HOUR, latestFinalCryptoDay, latestFinalHour, latestFinalKrxDay, ne
 import { fetchUpbitCandles, finalOnly, fetchUpbitTop } from '../data/upbit.js';
 import { fetchKrxDay, fetchNaverDaily, fetchDataGoKrHistory } from '../data/krx.js';
 import { candleStmts, kvSetStmt, healthOk, healthErr } from '../db/store.js';
-import { CRYPTO_CORE, KRX_ETFS, KRX_STOCKS, krxMeta, CRYPTO_MAX, RETENTION, ETF_NAV_UNIVERSE } from '../config.js';
+import { CRYPTO_CORE, KRX_ETFS, KRX_STOCKS, CANDIDATE_ETFS, krxMeta, CRYPTO_MAX, RETENTION, ETF_NAV_UNIVERSE } from '../config.js';
 
 export function cryptoUniverse(kv) {
   const u = kv['crypto:universe'];
   return Array.isArray(u) && u.length ? u : CRYPTO_CORE;
 }
-export const krxCodes = () => [...Object.keys(KRX_ETFS), ...Object.keys(KRX_STOCKS)];
+/** 기존 장부가 쓰는 종목: 이것만 수집 진행 조건(ready:krx:1d)과 공식 API 날짜 커서를 정한다. */
+export const coreKrxCodes = () => [...Object.keys(KRX_ETFS), ...Object.keys(KRX_STOCKS)];
+/** 수집 대상 전체: 후보용 새 ETF는 맨 뒤(틱당 대체 수집 몫에서 기존 종목이 먼저). */
+const isCandidateCode = (c) => c in CANDIDATE_ETFS && !(c in KRX_ETFS) && !(c in KRX_STOCKS);
+export const krxCodes = () => [...coreKrxCodes(), ...Object.keys(CANDIDATE_ETFS).filter(isCandidateCode)];
+/** 후보 종목의 수집 실패는 'cand:' 출처로 기록 → /health 는 보여 주기만 하고 멈춤 경보로 세지 않는다(health.js 정규식 밖). */
+const srcFor = (src, c) => (isCandidateCode(c) ? `cand:${src}` : src);
 
 function covKey(market, tf) { return `cov:${market}:${tf}`; }
 function mergeCov(cov, sym, bars) {
@@ -169,15 +175,19 @@ const allowNaver = (env) => String(env.ALLOW_UNOFFICIAL_NAVER ?? 'true') !== 'fa
  */
 export async function krxDailyTask(env, kv, now, { perTick = 6, fetcher = fetch } = {}) {
   const target = latestFinalKrxDay(now);
-  if ((kv['ready:krx:1d'] || 0) >= target) return false;
   const codes = krxCodes();
+  const core = coreKrxCodes();
   const cur = kv['krx:cur'] || {};
+  const officialCovers = (c) => env.KRX_AUTH_KEY && (krxMeta[c].etf || !(kv['krx:stock:off'] > now));
+  const fallbackDue = (c) => (cur[c] || 0) < target && !inBackoff(kv, 'krxfb', c, now) && (!officialCovers(c) || now > kstAt(target + DAY, 15));
+  // 기존 종목이 다 모였으면 끝. 단, 후보용 새 ETF가 아직 대체 수집 차례면 그것만 계속(실패 종목은 30분 쉼)
+  if ((kv['ready:krx:1d'] || 0) >= target && !codes.some((c) => !core.includes(c) && fallbackDue(c))) return false;
   const cov = kv['cov:krx:1d'] || {};
   let did = false;
   const extraStmts = [];
 
   if (env.KRX_AUTH_KEY) {
-    const minCur = Math.min(...codes.map((c) => cur[c] || 0));
+    const minCur = Math.min(...core.map((c) => cur[c] || 0)); // 후보 종목이 늦어도 공식 API 날짜는 기존 종목 기준
     const D = minCur ? nextKrxBusinessDay(minCur) : target;
     const tryKey = `krx:try:${D}`;
     if (D <= target && (kv[tryKey] || 0) < now - 50 * 60) {
@@ -211,9 +221,7 @@ export async function krxDailyTask(env, kv, now, { perTick = 6, fetcher = fetch 
   }
 
   // Per-symbol fallbacks for anything the official path did not cover (or no key).
-  const officialCovers = (c) => env.KRX_AUTH_KEY && (krxMeta[c].etf || !(kv['krx:stock:off'] > now));
-  const lagging = codes.filter((c) => (cur[c] || 0) < target && !inBackoff(kv, 'krxfb', c, now));
-  const fallback = lagging.filter((c) => !officialCovers(c) || now > kstAt(target + DAY, 15));
+  const fallback = codes.filter(fallbackDue);
   for (const c of fallback.slice(0, perTick)) {
     try {
       let bars;
@@ -230,16 +238,16 @@ export async function krxDailyTask(env, kv, now, { perTick = 6, fetcher = fetch 
       await store(env, kv, 'krx', '1d', c, bars, src);
       cur[c] = target;
       did = true;
-      await healthOk(env.DB, src);
+      await healthOk(env.DB, srcFor(src, c));
     } catch (e) {
-      await healthErr(env.DB, env.DATA_GO_KR_KEY ? 'datagokr' : 'naver', e);
+      await healthErr(env.DB, srcFor(env.DATA_GO_KR_KEY ? 'datagokr' : 'naver', c), e);
       kv[failKey('krxfb', c)] = now + 30 * 60;
       extraStmts.push(kvSetStmt(env.DB, failKey('krxfb', c), kv[failKey('krxfb', c)]));
     }
   }
   kv['krx:cur'] = cur;
   extraStmts.push(kvSetStmt(env.DB, 'krx:cur', cur));
-  const allChecked = codes.every((c) => (cur[c] || 0) >= target);
+  const allChecked = core.every((c) => (cur[c] || 0) >= target); // 후보 종목 수집 실패가 기존 장부를 멈추지 않게
   if (allChecked) { kv['ready:krx:1d'] = target; extraStmts.push(kvSetStmt(env.DB, 'ready:krx:1d', target)); }
   await env.DB.batch(extraStmts);
   return did;
@@ -283,7 +291,8 @@ export async function krxBackfillTask(env, kv, now, { perTick = 1, fetcher = fet
   const years = Number(env.KRX_BACKFILL_YEARS || 5);
   const floor = now - years * 365 * DAY;
   const cov = kv['cov:krx:1d'] || {};
-  const todo = krxCodes().filter((c) => (!cov[c] || cov[c].min > floor + 30 * DAY) && !kv[`bf:krx:${c}`]);
+  // 실패한 종목은 6시간 쉼 → 한 종목이 계속 실패해도 뒤 종목(후보 ETF)이 굶지 않게
+  const todo = krxCodes().filter((c) => (!cov[c] || cov[c].min > floor + 30 * DAY) && !kv[`bf:krx:${c}`] && !inBackoff(kv, 'krxbf', c, now));
   if (!todo.length) return false;
   if (!allowNaver(env) && !env.DATA_GO_KR_KEY) return false;
   let did = false;
@@ -295,7 +304,12 @@ export async function krxBackfillTask(env, kv, now, { perTick = 1, fetcher = fet
       kv[`bf:krx:${c}`] = 1;
       await store(env, kv, 'krx', '1d', c, bars, env.DATA_GO_KR_KEY ? 'datagokr' : 'naver', [kvSetStmt(env.DB, `bf:krx:${c}`, 1)]);
       did = true;
-    } catch (e) { await healthErr(env.DB, 'krx:backfill', e); break; }
+    } catch (e) {
+      await healthErr(env.DB, srcFor('krx:backfill', c), e);
+      kv[failKey('krxbf', c)] = now + 6 * HOUR;
+      await env.DB.batch([kvSetStmt(env.DB, failKey('krxbf', c), kv[failKey('krxbf', c)])]);
+      break;
+    }
   }
   return did;
 }
