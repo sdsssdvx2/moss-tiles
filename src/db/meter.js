@@ -1,6 +1,6 @@
 // D1 읽기 계량(2026-11-24 #F-010): 무료 한도는 '계정' 전체 하루 500만 행 읽기(UTC 자정에 다시 참). 넘으면 계정의 모든 D1
 // 쿼리(다른 사이트 포함)가 그날 실패한다 → 틱 동안 이 DB가 읽은 행(D1 응답 meta.rows_read)을 작업별로 더해 kv 'd1:reads'에 남기고,
-// 오늘 합계가 문턱을 넘으면 덜 급한 일을 쉰다(tick.js). 요청 경로(/health·대시보드)는 세지 않는다(작고 사람이 볼 때만).
+// 오늘 합계가 문턱을 넘으면 화면용 다시 계산만 쉰다(worker.js) — 수집·평가·기록은 그대로(#F-011). 요청 경로(/health·대시보드)는 세지 않는다.
 
 /** UTC 날짜(D1 한도가 다시 차는 기준). */
 export const utcDay = (t) => new Date(t * 1000).toISOString().slice(0, 10);
@@ -55,8 +55,8 @@ export function meteredDB(db, counter) {
 }
 
 /** 문턱(이 DB의 오늘 읽은 행, UTC). 계정 다른 DB가 하루 약 50만 행(11-24 D 보고) → 이 DB 250만이면 계정 약 300만. */
-export const D1_READ_SOFT = 2_500_000; // 넘으면 덜 급한 일(과거 재검증·과거 채우기·비교 AI·연구 가져오기)을 쉼
-export const D1_READ_HARD = 3_500_000; // 넘으면 수집·모의 장부 한 칸·알림만(평가·배분도 쉼)
+export const D1_READ_SOFT = 2_500_000; // 넘으면 화면용 캐시를 틱마다 만들지 않고(다음 화면 요청 때) 텔레그램 한 줄 — 결과에 들어가는 일은 그대로(#F-011)
+export const D1_READ_HARD = 3_500_000; // (지금은 SOFT와 같은 동작 — 결과에 들어가는 일은 어떤 문턱에서도 건너뛰지 않음)
 
 /** 오늘(UTC) 지금까지 읽은 행. 날짜가 바뀌었으면 0. */
 export function readsToday(kv, now) {

@@ -74,26 +74,38 @@ test('tick: under the threshold nothing is skipped and the tick records its own 
   assert.equal(ev.length, 0);
 });
 
-test('tick: over the soft threshold → less urgent work skipped, one Telegram line (instant category), not repeated', async () => {
-  assert.deepEqual([...D1_SKIP_SOFT].sort(), ['aidisc', 'cryptoBackfill1d', 'cryptoBackfill1h', 'krxBackfill', 'krxNavBackfill', 'research', 'workerBacktest'].sort());
-  assert.ok(D1_SKIP_HARD.includes('lifecycle') && D1_SKIP_HARD.includes('allocate') && !D1_SKIP_HARD.includes('paper') && !D1_SKIP_HARD.includes('notify'));
-  const t = await tickWith(D1_READ_SOFT + 10);
-  assert.ok(!t.log.some((x) => D1_SKIP_SOFT.some((k) => x.startsWith(k))), JSON.stringify(t.log));
-  assert.equal(t.ev.length, 1);
-  assert.match(t.ev[0].message, /D1 읽기 오늘\(UTC\) \d+만 행.*덜 급한 일/);
-  assert.ok(t.kv['d1:reads'].warned);
-  assert.ok(t.kv['d1:reads'].total >= D1_READ_SOFT + 10);
-  // 같은 날 다음 틱: 경고 다시 안 함
-  await tick(t.env, NOW + 600, { fetcher: async () => { throw new Error('x'); } });
-  assert.equal(t.DB.raw.prepare("SELECT COUNT(*) n FROM events WHERE kind = 'self_check'").get().n, 1);
+test('tick: over the threshold NOTHING that feeds results is skipped (#F-011) — same log as under it; one Telegram line, not repeated', async () => {
+  assert.deepEqual([...D1_SKIP_SOFT], []); // 수집·평가·기록·모의 장부·연구는 어떤 문턱에서도 건너뛰지 않음
+  assert.deepEqual([...D1_SKIP_HARD], []);
+  const under = await tickWith(null), over = await tickWith(D1_READ_SOFT + 10), hard = await tickWith(D1_READ_HARD + 10);
+  assert.deepEqual(over.log, under.log);
+  assert.deepEqual(hard.log, under.log);
+  const d1 = (t) => t.ev.filter((e) => e.message.includes('D1 읽기'));
+  assert.equal(d1(over).length, 1);
+  assert.match(d1(over)[0].message, /D1 읽기 오늘\(UTC\) \d+만 행.*화면용 캐시.*수집·평가·모의 장부는 그대로/);
+  assert.ok(over.kv['d1:reads'].warned);
+  assert.ok(over.kv['d1:reads'].total >= D1_READ_SOFT + 10);
+  await tick(over.env, NOW + 600, { fetcher: async () => { throw new Error('x'); } }); // 같은 날 다음 틱: 경고 다시 안 함
+  assert.equal(over.DB.raw.prepare("SELECT COUNT(*) n FROM events WHERE kind = 'self_check' AND message LIKE '%D1 읽기%'").get().n, 1);
 });
 
-test('tick: over the hard threshold the lifecycle pass is skipped too', async () => {
-  const t = await tickWith(D1_READ_HARD + 10);
-  assert.ok(!t.log.some((x) => x.startsWith('lifecycle') || x.startsWith('allocate')), JSON.stringify(t.log));
-  const d1 = t.ev.filter((e) => e.message.includes('D1 읽기'));
-  assert.equal(d1.length, 1);
-  assert.match(d1[0].message, /평가·배분까지/); // (평가를 쉬면 자기 점검 알림도 따로 날 수 있음 — 정상)
+test('scheduled: over the threshold only the dashboard cache rebuild is skipped (marked dirty instead); reads are saved incl. the cache build', async () => {
+  const { default: worker } = await import('../src/worker.js');
+  const run = async (reads) => {
+    const DB = makeD1();
+    if (reads != null) await DB.batch([kvSetStmt(DB, 'd1:reads', { day: utcDay(NOW), total: reads, ticks: 10, byTask: {} })]);
+    const env = { DB, COLLECT_ENABLED: 'false', FEEDS_ENABLED: 'false' };
+    await worker.scheduled({ scheduledTime: NOW * 1000 }, env, { waitUntil: () => {} }); // 첫 틱은 전체 평가(무거움) → 원래도 캐시 안 만듦
+    DB.raw.prepare("DELETE FROM kv WHERE k IN ('overview:cache', 'overview:dirty')").run();
+    await worker.scheduled({ scheduledTime: (NOW + 600) * 1000 }, env, { waitUntil: () => {} }); // 가벼운 틱
+    const kv = Object.fromEntries(DB.raw.prepare('SELECT k, v FROM kv').all().map((r) => [r.k, r.v]));
+    return kv;
+  };
+  const under = await run(null), over = await run(D1_READ_SOFT + 10);
+  assert.ok(under['overview:cache'] && !under['overview:dirty'], Object.keys(under).join(','));
+  assert.ok(!over['overview:cache'] && over['overview:dirty'], Object.keys(over).join(','));
+  assert.equal(JSON.parse(under['d1:reads']).ticks, 2);
+  assert.equal(JSON.parse(over['d1:reads']).ticks, 12);
 });
 
 test('signals has a (kind, t) index so kind/time lookups do not scan the whole table', () => {

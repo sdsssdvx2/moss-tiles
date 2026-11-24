@@ -16,17 +16,23 @@ import { buildScorecard, appendScorecard, scorecardLines } from '../core/scoreca
 import { selfCheckTask } from './selfcheck.js';
 import { meteredDB, readsToday, mergeReads, topTasks, D1_READ_SOFT, D1_READ_HARD } from '../db/meter.js';
 
-/** 오늘 읽은 행이 문턱을 넘으면 쉬는 일(덜 급한 것부터). soft: 과거 재검증·과거 채우기·비교 AI·연구 가져오기 / hard: + 평가·배분. */
-export const D1_SKIP_SOFT = Object.freeze(['krxBackfill', 'krxNavBackfill', 'cryptoBackfill1d', 'cryptoBackfill1h', 'aidisc', 'research', 'workerBacktest']);
-export const D1_SKIP_HARD = Object.freeze([...D1_SKIP_SOFT, 'lifecycle', 'allocate']);
+/**
+ * 2026-11-24 #F-011: 문턱을 넘어도 **결과에 들어가는 일(수집·평가·기록·모의 장부·연구)은 건너뛰지 않는다** — 사용자 "읽는 양 줄이면 퀄이 낮아지는 건 아닐까".
+ * 건너뛰는 것은 화면용 다시 계산(대시보드 캐시를 틱마다 새로 만드는 것 → 다음 화면 요청 때 만듦)뿐이고(worker.js), 건너뛴 날은 텔레그램 한 줄.
+ */
+export const D1_SKIP_SOFT = Object.freeze([]);
+export const D1_SKIP_HARD = Object.freeze([]);
 
-export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher = fetch } = {}) {
+export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher = fetch, meter: given = null } = {}) {
   // 2026-11-24 #F-010: 이 틱이 D1에서 읽은 행을 작업별로 센다(kv 'd1:reads', UTC 하루). 무료 읽기 한도는 계정 전체라 넘으면 다른 사이트도 멈춤.
-  const meter = { total: 0, byTask: {}, cur: 'kvAll' };
-  env = { ...env, DB: meteredDB(env.DB, meter) };
+  // 예약 실행(worker.js)은 meter를 넘겨 화면 캐시까지 같이 세고 기록도 거기서 한다. 직접 부르면(시험) 여기서 세고 기록한다.
+  const meter = given || { total: 0, byTask: {}, cur: 'kvAll' };
+  if (!given) env = { ...env, DB: meteredDB(env.DB, meter) };
+  meter.cur = 'kvAll';
   const kv = await kvAll(env.DB);
   const readsSoFar = readsToday(kv, now);
   const soft = readsSoFar >= Number(env.D1_READ_SOFT || D1_READ_SOFT), hard = readsSoFar >= Number(env.D1_READ_HARD || D1_READ_HARD);
+  Object.assign(meter, { soft, hard, prev: kv['d1:reads'] || null, hist: kv['d1:reads:hist'] || null });
   const skip = new Set(hard ? D1_SKIP_HARD : soft ? D1_SKIP_SOFT : []);
   const log = [];
   const run = async (name, fn) => {
@@ -74,19 +80,24 @@ export async function tick(env, now = Math.floor(Date.now() / 1000), { fetcher =
     meter.cur = 'meter';
     try {
       const top = Object.entries(topTasks(kv['d1:reads']?.byTask, 3)).map(([k, v]) => `${k} ${Math.round(v / 10000)}만`).join(', ');
-      await eventStmt(env.DB, { t: now, kind: 'self_check', strategy_id: null, message: `⚠️ D1 읽기 오늘(UTC) ${Math.round(readsSoFar / 10000)}만 행 — 계정 무료 한도(하루 500만, 다른 사이트와 같이 씀)를 지키려고 ${hard ? '평가·배분까지' : '덜 급한 일(과거 재검증·과거 채우기·비교 AI)을'} 오늘 쉽니다. 많이 읽은 곳: ${top || '-'}` }).run();
+      await eventStmt(env.DB, { t: now, kind: 'self_check', strategy_id: null, message: `⚠️ D1 읽기 오늘(UTC) ${Math.round(readsSoFar / 10000)}만 행 — 계정 무료 한도(하루 500만, 다른 사이트와 같이 씀)에 가까워 오늘은 화면용 캐시를 틱마다 다시 만들지 않습니다(수집·평가·모의 장부는 그대로). 많이 읽은 곳: ${top || '-'}` }).run();
       kv['d1:reads'] = { ...kv['d1:reads'], warned: now };
+      meter.prev = kv['d1:reads'];
     } catch (_) { /* 경고 실패는 틱을 막지 않음 */ }
   }
   await run('notify', () => notifyPending(env, { fetcher, kv, now }));
+  if (!given) await saveReads(env.DB, meter, now);
+  return log;
+}
+
+/** 계량 기록(틱 끝, 또는 예약 실행의 화면 캐시 뒤). 실패해도 틱을 막지 않는다. */
+export async function saveReads(db, meter, now) {
   meter.cur = 'meter';
   try {
-    const m = mergeReads(kv['d1:reads'], kv['d1:reads:hist'], meter, now);
-    kv['d1:reads'] = m.reads;
-    await env.DB.batch([kvSetStmt(env.DB, 'd1:reads', m.reads), ...(m.hist ? [kvSetStmt(env.DB, 'd1:reads:hist', m.hist)] : [])]);
-    if (m.hist) kv['d1:reads:hist'] = m.hist;
-  } catch (_) { /* 계량 기록 실패는 틱을 막지 않음 */ }
-  return log;
+    const m = mergeReads(meter.prev, meter.hist, meter, now);
+    await db.batch([kvSetStmt(db, 'd1:reads', m.reads), ...(m.hist ? [kvSetStmt(db, 'd1:reads:hist', m.hist)] : [])]);
+    return m;
+  } catch (_) { return null; }
 }
 
 /**
