@@ -203,9 +203,9 @@ export function withAiScale(base, opts = {}) {
   return {
     ...base,
     id: `${base.family}_ai${disc ? 'disc' : ''}_v${base.version}`, family: `${base.family}_ai${disc ? 'disc' : ''}`, overlayOf: base.id, aiOverlay: true, ...(disc ? { aiDisclosure: true } : {}),
-    name: `${base.name} + AI 판단(${disc ? '공시 포함, ' : ''}비중 조절)`, researchOnly: true,
+    name: `${base.name} + AI 판단(${disc ? '공시·뉴스레터 포함, ' : ''}비중 조절)`, researchOnly: true,
     description: disc
-      ? `${base.description} (공시 비교 장부: 'AI 판단' 장부와 같은 절차인데 AI가 읽는 자료에 전자공시(DART) 제목만 더함 — 공시가 판단을 낫게 하는지 보는 비교용. 새로 사는 양만 0.5~1배로 줄이고, AI가 혼자 매수·매도를 만들지 않음.)`
+      ? `${base.description} (공시 비교 장부: 'AI 판단' 장부와 같은 절차인데 AI가 읽는 자료에 전자공시(DART) 제목과 뉴스레터(어피티 머니레터·Glassnode, 11-24부터) 앞부분만 더함 — 이 자료가 판단을 낫게 하는지 보는 비교용. 새로 사는 양만 0.5~1배로 줄이고, AI가 혼자 매수·매도를 만들지 않음.)`
       : `${base.description} (AI 비교 장부: 하루 한 번 AI가 뉴스·지표를 읽고 매긴 점수(-1~+1)로 새로 사는 양만 0.5~1배로 줄임. AI가 혼자 매수·매도를 만들지 않음.)`,
     decide(ctx) {
       const d = base.decide(ctx);
