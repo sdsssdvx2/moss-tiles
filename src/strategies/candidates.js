@@ -104,17 +104,18 @@ export const etfDevTrendV1 = {
 // ---------------- 2차 사전 등록 (2026-11-24 12:3x, 결과 보기 전 — 요구사항 대조 '넉넉히' 반영) ----------------
 // 전부 매월 첫 거래일 조정(모의 검증의 실제 조정 12회가 1년 안에 차게), 12년 자료가 있는 종목만, 널리 알려진 규칙.
 const monthly = (ctx) => !(monthOf(ctx.t) === ctx.mem.month && ctx.barIndex > 0);
-/** 200일 평균 위면 weight, 아래·자료 부족이면 그 몫을 단기채권(공통). */
+/** 200일 평균 위면 weight, 아래·자료 부족이면 **그 몫만** 단기채권(사전 등록 표 그대로 — 위일 때 채권을 더 들지 않음, 채권 30% 상한). */
 function trendBook(ctx, syms, p) {
   const targets = {}, reasons = {};
-  let eq = 0;
+  let toBond = 0;
   for (const sym of syms) {
     const c = ctx.closes(sym, p.sma + 1);
-    if (c.length < p.sma) { reasons[sym] = `${symName(sym)}: 200일 평균을 낼 자료가 아직 모자라 쉼`; continue; }
-    if (c[c.length - 1] > sma(c, p.sma)) { targets[sym] = p.weight; eq += p.weight; reasons[sym] = `${symName(sym)}: 200일 평균 위 → ${Math.round(p.weight * 100)}% (월간 조정)`; }
-    else reasons[sym] = `${symName(sym)}: 200일 평균 아래 → 이 몫은 단기채권으로`;
+    if (c.length < p.sma) { toBond += p.weight; reasons[sym] = `${symName(sym)}: 200일 평균을 낼 자료가 아직 모자라 이 몫은 단기채권으로`; continue; }
+    if (c[c.length - 1] > sma(c, p.sma)) { targets[sym] = p.weight; reasons[sym] = `${symName(sym)}: 200일 평균 위 → ${Math.round(p.weight * 100)}% (월간 조정)`; }
+    else { toBond += p.weight; reasons[sym] = `${symName(sym)}: 200일 평균 아래 → 이 몫은 단기채권으로`; }
   }
-  bondFill(targets, reasons, eq);
+  const bond = Math.min(0.30, toBond);
+  if (bond > 0.02) { targets[BOND] = bond; reasons[BOND] = '200일 평균 아래인 종목의 몫은 단기채권 ETF에 보관 (현금 대용)'; }
   return { targets, reasons, mem: { month: monthOf(ctx.t) } };
 }
 
@@ -164,9 +165,10 @@ export const etfInvVol3V1 = {
     }
     const targets = {}, reasons = {};
     const inv = vols.reduce((a, x) => a + 1 / x.v, 0);
+    const avail = p.total * (vols.length / 3); // 자료 없는 종목의 몫(1/3)은 다른 종목에 나누지 않고 단기채권으로
     let eq = 0;
     for (const x of vols) {
-      const w = Math.min(p.cap, (p.total * (1 / x.v)) / inv);
+      const w = Math.min(p.cap, (avail * (1 / x.v)) / inv);
       targets[x.sym] = w; eq += w;
       reasons[x.sym] = `${symName(x.sym)}: 최근 변동성 연 ${Math.round(x.v * 100)}% → 비중 ${Math.round(w * 100)}% (변동성 역수, 월간 조정)`;
     }

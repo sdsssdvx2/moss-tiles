@@ -85,7 +85,7 @@ test('runner: judged once — pass → released, fail → rejected (both count a
 test('worker import: refuses before the release date and unknown ids; accepts after → paper ledger starts next tick', async () => {
   const env = { DB: makeD1() };
   const ready = dayT('2026-12-11');
-  await env.DB.batch([kvSetStmt(env.DB, 'ready:krx:1d', ready), kvSetStmt(env.DB, 'krx:cur', { '174350': ready, '161510': ready, '279530': ready })]);
+  await env.DB.batch([kvSetStmt(env.DB, 'ready:krx:1d', ready), kvSetStmt(env.DB, 'krx:cur', { '174350': ready, '161510': ready, '279530': ready }), ...['174350', '161510', '279530'].map((x) => kvSetStmt(env.DB, `bf:krx:${x}`, 1))]);
   const body = { candidates: [{ id: 'etf_quality_lowvol_v1', releasedAt: DEC13 }, { id: 'evil_v1' }, { id: 'krx_bh_v1' }], candidateStatus: { etf_quality_lowvol_v1: { status: 'released', note: 'x', at: DEC13 }, evil_v1: { status: 'x' } } };
   const r0 = await withNow(NOV24, () => importResearch(env, body));
   assert.equal(r0.candidates, 0);
@@ -191,7 +191,8 @@ test('rule: monthly candidates decide once per month; risk layer caps a 100%-bon
 
 test('rule: 2nd batch — gold/stock-bond trend, inverse-vol, permanent, absolute momentum follow the registration', () => {
   const g = candidateById.etf_gold_trend_v1;
-  assert.equal(g.decide(ctxOf({ '132030': ramp(260, 100, 1), '153130': ramp(260, 100, 0.01) }, { params: g.params })).targets['132030'], 0.30);
+  assert.deepEqual(g.decide(ctxOf({ '132030': ramp(260, 100, 1), '153130': ramp(260, 100, 0.01) }, { params: g.params })).targets, { '132030': 0.30 }); // 위: 금 30%만(채권 더 안 듦)
+  assert.deepEqual(g.decide(ctxOf({ '132030': ramp(260, 300, -0.5), '153130': ramp(260, 100, 0.01) }, { params: g.params })).targets, { '153130': 0.30 }); // 아래: 그 몫만 채권
   const sb = candidateById.etf_stockbond_trend_v1;
   const b = sb.decide(ctxOf({ '069500': ramp(260, 100, 1), '148070': ramp(260, 300, -0.5), '153130': ramp(260, 100, 0.01) }, { params: sb.params })).targets;
   assert.deepEqual(b, { '069500': 0.30, '153130': 0.30 });
@@ -229,10 +230,11 @@ test('runner (real evaluator, synthetic 12-year data): every due candidate gets 
 
 test('paper: a book using candidate ETFs waits for the collection cursor of those symbols; existing books do not', () => {
   const D = dayT('2026-12-14'), prev = dayT('2026-12-11');
-  const kv = { 'ready:krx:1d': D, 'krx:cur': { '174350': D, '161510': prev, '279530': D } };
+  const kv = { 'ready:krx:1d': D, 'krx:cur': { '174350': D, '161510': prev, '279530': D }, ...Object.fromEntries(['174350', '161510', '279530', '148070', '132030', '251350'].map((x) => [`bf:krx:${x}`, 1])) };
   assert.equal(readyFor(candidateById.etf_quality_lowvol_v1, kv), prev); // 161510 봉이 아직 → 하루 전까지만
   assert.equal(readyFor(STRATEGIES.find((s) => s.id === 'etf_trend_v1'), kv), D); // 기존 장부는 준비 표시 그대로
   assert.equal(readyFor(candidateById.etf_quality_lowvol_v1, { 'ready:krx:1d': D }), null); // 커서 없음 → 시작 안 함
+  assert.equal(readyFor(candidateById.etf_quality_lowvol_v1, { ...kv, 'krx:cur': { '174350': D, '161510': D, '279530': D }, 'bf:krx:279530': undefined }), null); // 깊은 과거 시세 전 → 시작 안 함
   assert.equal(readyFor(candidateById.etf_permanent_v1, kv), null); // 148070·132030 커서 없음 → 시작 안 함
   assert.equal(readyFor(candidateById.etf_permanent_v1, { ...kv, 'krx:cur': { ...kv['krx:cur'], '148070': D, '132030': D } }), D);
 });
@@ -246,4 +248,24 @@ test('worker import: rejected / no_data status changes leave one event each (vis
   const ev = env.DB.raw.prepare("SELECT strategy_id, message FROM events ORDER BY id").all();
   assert.deepEqual(ev.map((e) => e.strategy_id), ['etf_gold_trend_v1', 'etf_quality_lowvol_v1']);
   assert.match(ev[0].message, /미통과/);
+});
+
+test('rule: inverse-vol gives a missing symbol\u2019s third to bonds, not to the others', () => {
+  const iv = candidateById.etf_invvol3_v1;
+  const t = iv.decide(ctxOf({ '069500': wiggle(100, 100, 1.0, 0.05), '148070': wiggle(100, 100, 0.25, 0.05), '153130': ramp(100, 100, 0.01) }, { params: iv.params })).targets;
+  assert.ok(t['069500'] + t['148070'] <= 0.40 + 1e-9, JSON.stringify(t));
+  assert.ok(!('132030' in t));
+  assert.ok(t['153130'] >= 0.20 - 1e-9, JSON.stringify(t));
+});
+
+test('health: a released candidate book whose symbols stopped collecting is reported (not silent)', async () => {
+  const { healthReport } = await import('../src/jobs/health.js');
+  const D = dayT('2026-12-16'), old = dayT('2026-12-10');
+  const base = { 'tick:last': { t: D + 86400 }, 'ready:krx:1d': D, 'candidates:released': [{ id: 'etf_gold_trend_v1', releasedAt: 1 }] };
+  const ok = healthReport({ ...base, 'krx:cur': { '132030': D } }, [], D + 86400);
+  assert.ok(!ok.problems.some((x) => x.startsWith('candidate:lag')), JSON.stringify(ok.problems));
+  const bad = healthReport({ ...base, 'krx:cur': { '132030': old } }, [], D + 86400);
+  assert.ok(bad.problems.some((x) => x.startsWith('candidate:lag:etf_gold_trend_v1')), JSON.stringify(bad.problems));
+  const none = healthReport({ ...base, 'candidates:released': undefined, 'krx:cur': { '132030': old } }, [], D + 86400);
+  assert.ok(!none.problems.some((x) => x.startsWith('candidate:lag')));
 });

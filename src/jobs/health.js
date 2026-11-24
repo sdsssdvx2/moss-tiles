@@ -2,8 +2,10 @@
 // Used by an external morning health check: `ok:false` + `problems[]` means the paper lab has stalled.
 import { DAY, HOUR, latestFinalKrxDay, latestFinalCryptoDay, latestFinalHour, isKrxBusinessDay } from '../core/calendar.js';
 import { kvSetStmt } from '../db/store.js';
+import { candidateStrategies } from '../strategies/candidates.js';
+import { CANDIDATE_ETFS } from '../config.js';
 
-export const HEALTH_KEYS = ['tick:last', 'tick:lastErr', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'lc:at', 'lc:fullAt', 'lc:fullTry'];
+export const HEALTH_KEYS = ['tick:last', 'tick:lastErr', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'lc:at', 'lc:fullAt', 'lc:fullTry', 'candidates:released', 'krx:cur'];
 const FULL_STALE = 12 * HOUR; // full pass is due every 6h
 const TICK_STALE = 30 * 60;  // cron runs every 10 min
 const ERR_RECENT = 6 * HOUR; // a task error newer than this is reported
@@ -29,6 +31,13 @@ export function healthReport(kv, healthRows, now) {
   // KRX: the official daily file arrives next morning, so a lag of 1 business day is normal
   const krxLagDays = krxLag(kv['ready:krx:1d'], latestFinalKrxDay(now));
   if (krxLagDays == null || krxLagDays >= 2) problems.push(`krx1d:lag:${krxLagDays ?? 'none'}`);
+  // 공개된 사전 등록 후보 장부가 자기 종목(후보용 새 ETF) 수집이 멈춰 2거래일 넘게 서 있으면 보고(조용히 멈추지 않게)
+  for (const s of candidateStrategies(kv['candidates:released'])) {
+    const late = (s.universe || []).filter((x) => x in CANDIDATE_ETFS);
+    if (!late.length || !kv['ready:krx:1d']) continue;
+    const lag = krxLag(Math.min(...late.map((x) => kv['krx:cur']?.[x] || 0)) || null, kv['ready:krx:1d']);
+    if (lag == null || lag >= 2) problems.push(`candidate:lag:${s.id}:${lag ?? 'none'}`);
+  }
   const c1d = kv['ready:crypto:1d'];
   const crypto1dLagDays = c1d ? Math.round((latestFinalCryptoDay(now) - c1d) / DAY) : null;
   if (crypto1dLagDays == null || crypto1dLagDays >= 2) problems.push(`crypto1d:lag:${crypto1dLagDays ?? 'none'}`);

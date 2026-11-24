@@ -50,6 +50,7 @@ export function readyFor(s, kv) {
   if (!ready || s.market !== 'krx') return ready;
   const late = (s.universe || []).filter((x) => x in CANDIDATE_ETFS);
   if (!late.length) return ready;
+  if (late.some((x) => !kv[`bf:krx:${x}`])) return null; // 깊은 과거 시세를 채우기 전에는 시작하지 않음(나중에 채워져 재생이 달라지지 않게)
   const cur = kv['krx:cur'] || {};
   return Math.min(ready, ...late.map((x) => cur[x] || 0)) || null;
 }
