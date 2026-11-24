@@ -5,7 +5,7 @@ import { makeD1 } from './helpers.mjs';
 process.env.MOSS_SYNTHETIC = '1'; // 합성 자료: 고정된 실제 보존 구간 날짜를 쓰지도 새로 쓰지도 않음
 import { kvAll, kvSetStmt, getRuns } from '../src/db/store.js';
 import { importResearch } from '../src/jobs/research-import.js';
-import { paperTask } from '../src/jobs/paper.js';
+import { paperTask, readyFor } from '../src/jobs/paper.js';
 import { STRATEGIES, allStrategies, activeStrategies, validateStrategy, trialsFor } from '../src/strategies/index.js';
 import { CANDIDATES, candidateById, candidateStrategies, releaseAt } from '../src/strategies/candidates.js';
 import { dueCandidates, judgeCandidates, triedCandidates, orphanTrials, dataComplete, dataYears, labTrialsCount, importBody, evaluateStrategy } from '../backtest/run.mjs';
@@ -85,7 +85,7 @@ test('runner: judged once — pass → released, fail → rejected (both count a
 test('worker import: refuses before the release date and unknown ids; accepts after → paper ledger starts next tick', async () => {
   const env = { DB: makeD1() };
   const ready = dayT('2026-12-11');
-  await env.DB.batch([kvSetStmt(env.DB, 'ready:krx:1d', ready)]);
+  await env.DB.batch([kvSetStmt(env.DB, 'ready:krx:1d', ready), kvSetStmt(env.DB, 'krx:cur', { '174350': ready, '161510': ready, '279530': ready })]);
   const body = { candidates: [{ id: 'etf_quality_lowvol_v1', releasedAt: DEC13 }, { id: 'evil_v1' }, { id: 'krx_bh_v1' }], candidateStatus: { etf_quality_lowvol_v1: { status: 'released', note: 'x', at: DEC13 }, evil_v1: { status: 'x' } } };
   const r0 = await withNow(NOV24, () => importResearch(env, body));
   assert.equal(r0.candidates, 0);
@@ -225,4 +225,25 @@ test('runner (real evaluator, synthetic 12-year data): every due candidate gets 
     assert.equal(!!j.results[s.id], l.status === 'released');
   }
   assert.equal(j.ledger.etf_dev_trend_v1.status, 'rejected');
+});
+
+test('paper: a book using candidate ETFs waits for the collection cursor of those symbols; existing books do not', () => {
+  const D = dayT('2026-12-14'), prev = dayT('2026-12-11');
+  const kv = { 'ready:krx:1d': D, 'krx:cur': { '174350': D, '161510': prev, '279530': D } };
+  assert.equal(readyFor(candidateById.etf_quality_lowvol_v1, kv), prev); // 161510 봉이 아직 → 하루 전까지만
+  assert.equal(readyFor(STRATEGIES.find((s) => s.id === 'etf_trend_v1'), kv), D); // 기존 장부는 준비 표시 그대로
+  assert.equal(readyFor(candidateById.etf_quality_lowvol_v1, { 'ready:krx:1d': D }), null); // 커서 없음 → 시작 안 함
+  assert.equal(readyFor(candidateById.etf_permanent_v1, kv), null); // 148070·132030 커서 없음 → 시작 안 함
+  assert.equal(readyFor(candidateById.etf_permanent_v1, { ...kv, 'krx:cur': { ...kv['krx:cur'], '148070': D, '132030': D } }), D);
+});
+
+test('worker import: rejected / no_data status changes leave one event each (visible after 12-15); unchanged weeks stay quiet', async () => {
+  const env = { DB: makeD1() };
+  const wk = (st) => withNow(DEC13, () => importResearch(env, { candidateStatus: st }));
+  await wk({ etf_gold_trend_v1: { status: 'rejected', note: '샤프 미달', at: DEC13 }, etf_quality_lowvol_v1: { status: 'waiting', at: 0 } });
+  await wk({ etf_gold_trend_v1: { status: 'rejected', note: '샤프 미달', at: DEC13 }, etf_quality_lowvol_v1: { status: 'no_data', note: '수집 실패', at: DEC13 } });
+  await wk({ etf_gold_trend_v1: { status: 'rejected', note: '샤프 미달', at: DEC13 }, etf_quality_lowvol_v1: { status: 'no_data', note: '수집 실패', at: DEC13 } });
+  const ev = env.DB.raw.prepare("SELECT strategy_id, message FROM events ORDER BY id").all();
+  assert.deepEqual(ev.map((e) => e.strategy_id), ['etf_gold_trend_v1', 'etf_quality_lowvol_v1']);
+  assert.match(ev[0].message, /미통과/);
 });

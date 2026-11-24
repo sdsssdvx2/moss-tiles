@@ -27,6 +27,13 @@ export async function importResearch(env, body) {
   if (body?.candidateStatus && typeof body.candidateStatus === 'object') {
     const st = {};
     for (const [id, v] of Object.entries(body.candidateStatus).slice(0, 20)) if (candidateById[id]) st[id] = { status: String(v?.status || '').slice(0, 20), note: String(v?.note || '').slice(0, 200), at: Number(v?.at) | 0 };
+    // 미통과·자료 부족도 12-15 뒤 사람이 보게: 상태가 바뀐 주에만 이벤트 한 줄(텔레그램 요약으로 나감). 통과는 위에서 따로.
+    const prev = kv['candidates:status'] || {};
+    const word = { rejected: '과거 검증 미통과(다시 고르지 않음, 시도 수에는 남음)', no_data: '자료 부족 — 다음 주 다시 봄' };
+    for (const [id, v] of Object.entries(st)) {
+      if (!word[v.status] || prev[id]?.status === v.status) continue;
+      stmts.push(env.DB.prepare('INSERT INTO events (t, kind, strategy_id, message, notified) VALUES (?,?,?,?,0)').bind(nowSec, 'stage', id, `🧪 사전 등록 후보 ${candidateById[id].name}: ${word[v.status]}${v.note ? ` · ${v.note}` : ''}`.slice(0, 500)));
+    }
     stmts.push(kvSetStmt(env.DB, 'candidates:status', st));
   }
   const variants = Array.isArray(kv.variants) ? kv.variants : [];
