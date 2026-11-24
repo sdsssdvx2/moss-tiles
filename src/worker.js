@@ -1,5 +1,6 @@
 // family-invest-paper-v2 — PAPER TRADING ONLY. No broker/exchange order endpoints, no private keys.
-import { tick } from './jobs/tick.js';
+import { tick, saveReads } from './jobs/tick.js';
+import { meteredDB } from './db/meter.js';
 import { lifecycleTask } from './jobs/lifecycle.js';
 import { sendTelegram, scheduledSummary, notifyStatus, saveNotifySettings, notifyTest } from './jobs/notify.js';
 import { SettingsError } from './core/notify-schedule.js';
@@ -174,18 +175,24 @@ export default {
       const send = await scheduledSummary(env, now);
       if (send) ctx.waitUntil(send.catch(() => {}));
     } catch (_) {}
+    // 2026-11-24 #F-010: 틱과 화면 캐시가 D1에서 읽은 행을 같이 센다(kv 'd1:reads'). 요약·심장 박동은 작아서 세지 않음.
+    const meter = { total: 0, byTask: {}, cur: 'kvAll' };
+    const menv = { ...env, DB: meteredDB(env.DB, meter) };
     let log;
-    try { log = await tick(env, now); } catch (e) { log = [`tick:ERR:${String(e?.message || e).slice(0, 80)}`]; }
+    try { log = await tick(menv, now, { meter }); } catch (e) { log = [`tick:ERR:${String(e?.message || e).slice(0, 80)}`]; }
     if (env.LOG_TICKS === 'true' || log.some((x) => String(x).includes(':ERR'))) console.log(JSON.stringify({ tick: now, log }));
     // heartbeat for /health (stall detection by the morning health check)
     try { await env.DB.batch(heartbeatStmts(env.DB, now, log)); } catch (_) {}
     // Refresh the cached dashboard JSON only after a light tick (Worker CPU limit); else mark it dirty
     // so the next dashboard request rebuilds it. OVERVIEW_CACHE_IN_TICK: auto | always | never.
+    // 2026-11-24 #F-011: D1 읽기 문턱을 넘은 날은 화면용 캐시를 틱마다 만들지 않는다(다음 화면 요청 때 만듦 — 결과에 안 들어감).
     const mode = String(env.OVERVIEW_CACHE_IN_TICK || 'auto');
     const heavy = log.some((x) => /^(workerBacktest|lifecycle|krxBackfill|cryptoBackfill|prune)/.test(x)) || log.length > 3;
+    meter.cur = 'overview';
     try {
-      if (mode === 'always' || (mode === 'auto' && !heavy)) await buildOverviewCache(env, now);
-      else await markOverviewDirty(env, now);
+      if (!meter.soft && (mode === 'always' || (mode === 'auto' && !heavy))) await buildOverviewCache(menv, now);
+      else await markOverviewDirty(menv, now);
     } catch (_) {}
+    if (meter.prev !== undefined) await saveReads(env.DB, meter, now);
   },
 };
