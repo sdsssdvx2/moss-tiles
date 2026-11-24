@@ -80,7 +80,8 @@ export async function weeklyDecisionTask(env, kv, now) {
   kv['decision:weeklyAt'] = now;
   const card = (kv['paper:weekly'] || []).slice(-1)[0];
   const extra = card && now - card.at < 2 * 86400 ? scorecardLines(card) : [];
-  const fresh = newCandidateLines(kv['candidates:firstSelected'], lastWeekly, (id) => candidateById[id]?.name || id);
+  const inBody = new Set((d.changes || []).filter((c) => c.firstCandidate).map((c) => c.id)); // weeklyText가 이미 찍는 줄
+  const fresh = newCandidateLines(kv['candidates:firstSelected'], lastWeekly, (id) => candidateById[id]?.name || id, inBody);
   const head = fresh.length ? `${weeklyText(d)}\n${fresh.join('\n')}` : weeklyText(d);
   const message = extra.length ? `${head}\n\n${extra.join('\n')}` : head;
   await env.DB.batch([kvSetStmt(env.DB, 'decision:weeklyAt', now), eventStmt(env.DB, { t: now, kind: 'decision_weekly', strategy_id: null, message })]);

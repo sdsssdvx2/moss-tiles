@@ -264,10 +264,13 @@ export function markFirstCandidateSelections(changes, firstSelected, isCandidate
   return { changes: out, firstSelected: seen, fresh: [...fresh] };
 }
 
-/** 주간 결론에 붙일 줄: 지난 주간 결론(sinceT) 뒤 처음 선발된 후보마다 한 줄. nameOf(id) = 이름. */
-export function newCandidateLines(firstSelected, sinceT, nameOf = (id) => id) {
+/**
+ * 주간 결론에 붙일 줄: 지난 주간 결론(sinceT) 뒤 처음 선발된 후보마다 한 줄. nameOf(id) = 이름.
+ * skip = 이미 결론 본문(weeklyText가 찍는 d.changes)에 '새 후보' 줄이 있는 id — 같은 줄을 두 번 쓰지 않음.
+ */
+export function newCandidateLines(firstSelected, sinceT, nameOf = (id) => id, skip = new Set()) {
   return Object.entries(firstSelected || {})
-    .filter(([, t]) => t > (sinceT || 0))
+    .filter(([id, t]) => t > (sinceT || 0) && !skip.has(id))
     .sort((a, b) => a[1] - b[1])
     .map(([id]) => `🧪 새 후보 ${id} 선발 (${nameOf(id)}) — 사전 등록 후보가 처음으로 기준을 넘었어요. 실제 돈 연결은 공개 뒤 처음 보는 자료 기간을 따로 채운 다음에만 따져요.`);
 }

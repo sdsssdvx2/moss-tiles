@@ -3,13 +3,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeD1 } from './helpers.mjs';
-import { STRATEGIES, variantStrategies } from '../src/strategies/index.js';
+import { STRATEGIES, variantStrategies, trialsFor } from '../src/strategies/index.js';
 import { CANDIDATES, candidateById } from '../src/strategies/candidates.js';
 import { evaluateStage, GATE_DEFAULTS } from '../src/core/lifecycle.js';
 import { decide, decideAll, exclusion, selectionChecks, markFirstCandidateSelections, newCandidateLines, weeklyText } from '../src/core/decision.js';
 import { PRINCIPLES, BOOKS } from '../src/core/principles.js';
 import { kvSetStmt } from '../src/db/store.js';
 import { weeklyDecisionTask } from '../src/jobs/tick.js';
+import { evaluateStrategy, judgeCandidates } from '../backtest/run.mjs';
+import { makeBars } from './helpers.mjs';
 
 const DAY = 86400;
 const NOW = Date.UTC(2026, 11, 20, 3) / 1000;
@@ -107,4 +109,37 @@ test('F-007 (b): Monday weekly conclusion carries the "새 후보 <id> 선발" l
   assert.equal(await weeklyDecisionTask(env, kv, mon + 7 * DAY), true);
   const ev2 = await env.DB.prepare("SELECT message FROM events WHERE kind = 'decision_weekly' ORDER BY id").all();
   assert.ok(!ev2.results.at(-1).message.includes('새 후보'), ev2.results.at(-1).message);
+});
+
+test('F-007 (b): the weekly message never repeats the line when the latest pass already printed it (safe + growth)', async () => {
+  const env = { DB: makeD1() };
+  const mon = Date.UTC(2026, 11, 21, 0, 0) / 1000;
+  const base = decideAll([], { now: mon - 3600 });
+  const fc = markFirstCandidateSelections([
+    { t: mon - 3600, kind: 'add', id: 'etf_gold_trend_v1', text: 'ETF 금: 기준을 모두 통과해 자동으로 선발됨' },
+    { t: mon - 3600, kind: 'add', id: 'etf_gold_trend_v1', book: 'growth', text: '[공격 장부] ETF 금: 기준을 모두 통과해 자동으로 선발됨' },
+  ], {}, (id) => !!candidateById[id], mon - 3600);
+  const d = { ...base, changes: fc.changes };
+  const kv = { 'decision:current': d, 'decision:weeklyAt': mon - 7 * DAY, 'candidates:firstSelected': fc.firstSelected };
+  assert.equal(await weeklyDecisionTask(env, kv, mon), true);
+  const msg = (await env.DB.prepare("SELECT message FROM events WHERE kind = 'decision_weekly' ORDER BY id").all()).results.at(-1).message;
+  assert.equal((msg.match(/새 후보 etf_gold_trend_v1 선발/g) || []).length, 2, msg); // 본문의 안전·공격 장부 두 줄뿐, 덧붙인 줄 없음
+  assert.ok(!msg.includes('사전 등록 후보가 처음으로'), msg);
+});
+
+test('F-007 (a): the research runner computes the lab-wide trial correction (dsrLab) for a candidate exactly as for a variant', () => {
+  const c = candidateById.etf_gold_trend_v1;
+  const krx = Object.fromEntries(c.universe.map((x, i) => [x, makeBars({ start: '2014-08-29', n: 3000, seed: 80 + i, skipNonKrx: true, drift: 0.0003, vol: 0.01, p0: 10000 + i * 500 })]));
+  const data = { krx, krxRaw: krx, crypto1d: {}, crypto1h: {}, source: 'test' };
+  // 실제 파이프라인 값: 후보는 판정 때 자기 자신 1회(trialsFor(s,[s])), 새 가족의 첫 변형은 기록된 가족 합계 1회 → 둘 다 가족 시도 1
+  const asVariant = { ...c, id: 'etf_gold_trend_v9', candidate: false, releaseDate: undefined, generated: true, variantOf: c.id, version: 9, priorTrials: 1 };
+  const a = evaluateStrategy(c, data, { extraTrials: trialsFor(c, [c]) }), b = evaluateStrategy(asVariant, data, { extraTrials: 0 });
+  assert.equal(a.trials, 1); assert.equal(b.trials, 1);
+  assert.ok(a && b);
+  assert.ok(Number.isFinite(a.dsrLab) && a.labTrials >= 1, JSON.stringify({ dsrLab: a.dsrLab, labTrials: a.labTrials }));
+  for (const k of ['dsr', 'dsrLab', 'labTrials', 'trials', 'luckSharpe']) assert.deepEqual(a[k], b[k], k);
+  // 판정이 통과면 Worker로 가는 근거에 dsrLab이 그대로 실림(자동 선발 관문 6번이 읽는 값)
+  const far = Date.parse('2026-12-06T05:17:00+09:00') / 1000;
+  const j = judgeCandidates([c], {}, far, () => ({ ...a }));
+  if (j.ledger[c.id].status === 'released') assert.equal(j.results[c.id].dsrLab, a.dsrLab);
 });
