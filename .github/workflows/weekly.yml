@@ -30,6 +30,6 @@ jobs:
         run: |
           git config user.name "moss-bot"
           git config user.email "moss-bot@users.noreply.github.com"
-          git add backtest/trials.json backtest/holdout.json backtest/variants.json backtest/results/import.json backtest/results/latest-report-ko.md 2>/dev/null || true
+          git add backtest/trials.json backtest/holdout.json backtest/variants.json backtest/candidates.json backtest/results/import.json backtest/results/latest-report-ko.md 2>/dev/null || true
           git commit -m "weekly $(date -u +%F)" || echo "nothing to commit"
           git push || echo "push skipped"

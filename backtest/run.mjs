@@ -25,6 +25,7 @@ import { KRX_ALL, krxMeta, CRYPTO_CORE, CRYPTO_HOURLY, RETENTION } from '../src/
 import { downsample } from '../src/db/store.js';
 import { SEARCH_SPACES, VARIANTS_PER_FAMILY_PER_RUN } from './search-spaces.mjs';
 import { llmIdeas } from './llm-ideas.mjs';
+import { CANDIDATES, releaseAt } from '../src/strategies/candidates.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CACHE = join(HERE, '.cache');
@@ -230,6 +231,54 @@ export function ledgerTrials(family) { const v = readTrials()[family]; return ty
 const VARIANTS = join(HERE, 'variants.json');
 const readVariants = () => (existsSync(VARIANTS) ? JSON.parse(readFileSync(VARIANTS, 'utf8')) : []);
 
+// ---------------- 사전 등록 후보 대기열 (src/strategies/candidates.js, backtest/CANDIDATES-PREREG.md) ----------------
+// candidates.json = { <id>: { status: 'released'|'rejected', at, trials, note } }. 한 번 판정한 후보는 다시 판정하지 않는다
+// (매주 보존 구간을 다시 보며 고르지 않게). 자료 기간이 모자라면 판정하지 않고 다음 주에 다시 본다(기록 안 함).
+const CANDS = join(HERE, 'candidates.json');
+const readCands = () => (existsSync(CANDS) ? JSON.parse(readFileSync(CANDS, 'utf8')) : {});
+/** 자료 기간(년): evaluateStrategy 와 같은 방식으로 날짜만 보고 계산한다(수익·결과는 보지 않음). */
+export function dataYears(s, data) {
+  const tl = timeline(s, seriesFor(s, data));
+  const warm = Math.min(s.lookback || 100, Math.floor(tl.length / 4));
+  return tl.length > warm + 1 ? (tl[tl.length - 1] - tl[warm]) / DAY / 365.25 : 0;
+}
+/** 판정까지 간 후보(연구실 시도 수에 들어감): released + rejected. */
+export const triedCandidates = (ledger) => CANDIDATES.filter((s) => ['released', 'rejected'].includes(ledger?.[s.id]?.status));
+/**
+ * 이번 실행에서 판정할 후보 고르기(순수). 공개 시각(KST 자정)이 지났고, 아직 판정 안 했고, 자료 기간이 관문 이상인 것.
+ * 자료 기간이 모자라면 status 'no_data'(기록 안 함 → 다음 주 다시), 날짜 전이면 'waiting'.
+ */
+export function dueCandidates(now, ledger, yearsOf, minYears = GATE_DEFAULTS.backtest.slowMinYears) {
+  const due = [], status = {};
+  for (const s of CANDIDATES) {
+    const l = ledger?.[s.id];
+    if (l?.status === 'released' || l?.status === 'rejected') { status[s.id] = { status: l.status, at: l.at, note: l.note || '' }; continue; }
+    if (now < releaseAt(s)) { status[s.id] = { status: 'waiting', at: 0, note: `공개 ${s.releaseDate}` }; continue; }
+    const y = yearsOf(s);
+    if (y < minYears) { status[s.id] = { status: 'no_data', at: now, note: `자료 기간 ${y.toFixed(1)}년 < ${minYears}년 — 자료가 쌓이면 다시 봄` }; continue; }
+    due.push(s);
+  }
+  return { due, status };
+}
+/**
+ * 판정(순수, 평가 함수 주입): 통과(G1 → 모의 검증) = released, 미통과 = rejected, 평가 불가(null) = no_data(기록 안 함).
+ * 후보 가족은 STRATEGIES 밖이라 trialsFor 기본값이 0 → 자기 자신 1회 + 원장 시도를 꼭 더한다.
+ */
+export function judgeCandidates(due, ledger, now, evaluate) {
+  const next = { ...(ledger || {}) }, status = {}, results = {};
+  for (const s of due) {
+    const r = evaluate(s, { extraTrials: trialsFor(s, [s]) + ledgerTrials(s.family) });
+    if (!r) { status[s.id] = { status: 'no_data', at: now, note: '과거 검증에 쓸 개발 구간 자료 부족 — 다음 주 다시' }; continue; }
+    const g1 = evaluateStage({ strategy: s, bt: r, paper: null, kill: null, gates: GATE_DEFAULTS });
+    const ok = g1.stage === 'paper';
+    const failed = (g1.checks || []).filter((c) => !c.ok).map((c) => c.text).slice(0, 3).join(' / ');
+    next[s.id] = { status: ok ? 'released' : 'rejected', at: now, trials: r.trials, note: (ok ? `공개 ${ymd(now)}: 과거 검증 통과` : `공개 ${ymd(now)}: 미통과 — ${failed}`).slice(0, 200) };
+    status[s.id] = { status: next[s.id].status, at: now, note: next[s.id].note };
+    if (ok) results[s.id] = r;
+  }
+  return { ledger: next, status, results };
+}
+
 async function research(data, results, remote) {
   // trial ledger: distinct parameter sets tried per family (re-trying the same set is not a new trial)
   const ledger = readTrials();
@@ -331,14 +380,14 @@ function seedSql(data, results, research) {
 
 // ---------------- report ----------------
 const pc = (x) => (x == null ? '-' : `${x >= 0 ? '+' : ''}${(x * 100).toFixed(1)}%`);
-function reportKo(results, research) {
+function reportKo(results, research, cand = null) {
   const any = Object.values(results)[0];
   const L = [`# 백테스트 결과 (${ymd(NOW)} 생성, 데이터: ${flag('--fixtures') ? '테스트용 가짜 데이터' : '업비트·네이버 공개 시세'})`, '',
     '판정은 "끝까지 안 본 마지막 25% 구간(보존 구간)" 기준입니다. 비용(수수료·미끄러짐·해외주식형/채권형 ETF 매매차익 15.4% 세금)을 뺀 값입니다.',
     '**주의: 보존 구간도 설계하는 사람이 이미 지나간 시기라 "완전히 처음 보는 자료"가 아닙니다. 진짜 처음 보는 자료는 2026-11-16 이후 모의 기록뿐입니다.**', '',
     `여러 전략 중 우연히 좋은 것을 고르는 효과: 연구실 전체 시도 ${any?.labTrials ?? '-'}개 → 실력이 전혀 없어도 그중 최고 샤프는 운만으로 약 **${any?.luckSharpe ?? '-'}** (보존 구간 길이 기준) 나올 수 있습니다.`, '',
     '| 전략 | 기간 | 보존구간 수익 | 그냥 보유 | 위험 맞춤 기준(지수 비중) | 비용2배 | 최대낙폭(보유 / 위험맞춤) | 샤프(위험맞춤) | 전체 거래 | DSR 가족(시도) | DSR 연구실 전체 | 1단계 판정 |', '|---|---|---|---|---|---|---|---|---|---|---|---|'];
-  const all = [...STRATEGIES, ...variantStrategies(readVariants())];
+  const all = [...STRATEGIES, ...variantStrategies(readVariants()), ...CANDIDATES.filter((s) => results[s.id])];
   for (const s of all) {
     const r = results[s.id];
     if (!r) continue;
@@ -346,6 +395,11 @@ function reportKo(results, research) {
     const verdict = s.benchmarkOnly ? '기준선' : g.stage === 'bt_failed' ? '미통과' : '통과 → 모의 검증' + (s.researchOnly ? '(연구용)' : '');
     const rm = r.holdout.riskMatched;
     L.push(`| ${s.name} | ${r.years}년 | ${pc(r.holdout.totalReturn)} | ${pc(r.holdout.bench.totalReturn)} | ${rm ? `${pc(rm.totalReturn)} (${Math.round(rm.weight * 100)}%)` : '-'} | ${pc(r.holdout2x.totalReturn)} | ${(r.holdout.mdd * 100).toFixed(1)}% (${(r.holdout.bench.mdd * 100).toFixed(1)}% / ${rm ? (rm.mdd * 100).toFixed(1) + '%' : '-'}) | ${r.holdout.sharpe.toFixed(2)} (${rm ? rm.sharpe.toFixed(2) : '-'}) | ${r.totalTrades} | ${Math.round(r.dsr * 100)}% (${r.trials}) | ${Math.round((r.dsrLab ?? 0) * 100)}% | ${verdict} |`);
+  }
+  if (cand?.status && Object.keys(cand.status).length) {
+    const word = { waiting: '공개 전', no_data: '자료 부족(다음 주 다시)', released: '통과 → 모의 검증', rejected: '미통과(다시 고르지 않음)' };
+    L.push('', '## 사전 등록 후보 대기열', '');
+    for (const s of CANDIDATES) { const st = cand.status[s.id]; if (st) L.push(`- ${s.name} (${s.id}, 공개 ${s.releaseDate}): ${word[st.status] || st.status}${st.note ? ` — ${st.note}` : ''}`); }
   }
   if (research) { L.push('', '## 자동 연구(변형 탐색)', ''); for (const v of research.variants) L.push(`- 새 후보 ${v.id}: ${JSON.stringify(v.params)} (누적 시도 ${v.trials})`); if (!research.variants.length) L.push('- 이번 주 통과한 새 변형 없음 (정상: 대부분 탈락해야 함)'); }
   L.push('', '※ 과거 성과는 미래를 보장하지 않습니다. 대형주·코인 목록은 "지금" 기준이라 생존 편향이 있습니다. 투자 조언이 아닙니다.');
@@ -410,10 +464,19 @@ async function main() {
   const data = await loadData();
   const only = opt('--only')?.split(',');
   const results = {};
-  LAB_TRIALS = labTrialsCount();
-  log(`· 연구실 전체 시도 수(보정용): ${LAB_TRIALS}`);
+  // 사전 등록 후보: 공개 날짜가 지난 것만, 주간 연구(--research)에서 한 번 판정. 이번 주에 판정할 것도 시도 수에 미리 넣는다.
+  let cand = { ledger: readCands(), due: [], status: {} };
+  if (flag('--research')) {
+    // 날짜 주입(--candidates-as-of YYYY-MM-DD)은 가짜 자료(--fixtures)에서만 받는다
+    const asOf = opt('--candidates-as-of') && flag('--fixtures') ? Date.parse(`${opt('--candidates-as-of')}T06:00:00+09:00`) / 1000 : NOW;
+    cand = { ...cand, ...dueCandidates(asOf, cand.ledger, (s) => dataYears(s, data)) };
+  }
+  const candRegistry = [...triedCandidates(cand.ledger), ...cand.due];
+  LAB_TRIALS = labTrialsCount([...STRATEGIES, ...candRegistry]);
+  log(`· 연구실 전체 시도 수(보정용): ${LAB_TRIALS}${candRegistry.length ? ` (사전 등록 후보 ${candRegistry.length}개 포함)` : ''}`);
   // registered weekly-research variants are re-evaluated too, so their evidence (risk-matched baseline etc.) stays current
-  for (const s of [...STRATEGIES, ...variantStrategies(readVariants())]) {
+  const releasedBefore = CANDIDATES.filter((s) => cand.ledger?.[s.id]?.status === 'released');
+  for (const s of [...STRATEGIES, ...variantStrategies(readVariants()), ...releasedBefore]) {
     if (s.external || s.noBacktest || (only && !only.includes(s.id))) continue;
     const t0 = Date.now();
     try {
@@ -421,7 +484,8 @@ async function main() {
       // an overlay (AI·뉴스 거부권 비교 장부) is the base rule plus one more idea: it inherits the base family's trials
       const baseOf = s.overlayOf ? byId[s.overlayOf] : null;
       const extra = s.generated ? Math.max(0, ledgerTrials(s.family) - (s.priorTrials || 0))
-        : baseOf ? trialsFor(baseOf) + ledgerTrials(baseOf.family) + ledgerTrials(s.family) : ledgerTrials(s.family);
+        : baseOf ? trialsFor(baseOf) + ledgerTrials(baseOf.family) + ledgerTrials(s.family)
+        : s.candidate ? trialsFor(s, [s]) + ledgerTrials(s.family) : ledgerTrials(s.family);
       const r = evaluateStrategy(s, data, { extraTrials: extra });
       if (!r) { log(`  - ${s.id}: 데이터 부족`); continue; }
       results[s.id] = r;
@@ -434,16 +498,23 @@ async function main() {
     try { const r = await fetch(pushUrl.replace(/\/api\/import$/, '/api/research-state'), { headers: { authorization: `Bearer ${process.env.IMPORT_TOKEN}` } }); if (r.ok) remote = await r.json(); } catch {}
   }
   if (!remote) remote = { variants: readVariants(), trials: {} };
+  if (cand.due.length) {
+    const j = judgeCandidates(cand.due, cand.ledger, NOW, (s, o) => evaluateStrategy(s, data, o));
+    Object.assign(results, j.results);
+    cand = { ...cand, ledger: j.ledger, status: { ...cand.status, ...j.status } };
+    for (const [id, st] of Object.entries(j.status)) log(`  · 사전 등록 후보 ${id}: ${st.status} — ${st.note}`);
+    if (!flag('--fixtures')) writeFileSync(CANDS, JSON.stringify(j.ledger, null, 2));
+  }
   const res = flag('--research') ? await research(data, results, remote) : null;
   const tag = flag('--fixtures') ? 'fixtures' : 'latest';
   let lev = null;
   try { lev = leverageStudy(data); } catch (e) { log(`  ! leverage study: ${e.message}`); }
   writeFileSync(join(OUT, `${tag}.json`), JSON.stringify({ generatedAt: NOW, results, research: res, leverage: lev }, null, 1));
-  writeFileSync(join(OUT, `${tag}-report-ko.md`), reportKo(results, res) + '\n\n' + leverageMd(lev));
+  writeFileSync(join(OUT, `${tag}-report-ko.md`), reportKo(results, res, cand) + '\n\n' + leverageMd(lev));
   log(`\n결과: backtest/results/${tag}.json, ${tag}-report-ko.md`);
   const seedOut = opt('--seed-sql');
   if (seedOut) { writeFileSync(seedOut, seedSql(data, results, res)); log(`D1 시드 SQL: ${seedOut}`); }
-  const body = importBody(results, res, lev);
+  const body = importBody(results, res, lev, cand);
   const exportOut = opt('--export');
   if (exportOut) { writeFileSync(exportOut, JSON.stringify(body)); log(`가져오기 파일(워커가 RESEARCH_URL 로 읽음): ${exportOut}`); }
   if (res?.variants?.length && !flag('--fixtures')) writeFileSync(VARIANTS, JSON.stringify([...readVariants(), ...res.variants.map(({ summary, ...v }) => v)], null, 1));
@@ -456,9 +527,12 @@ async function main() {
 }
 
 /** Body for /api/import and for the pulled import.json (same validation on the Worker side). */
-export function importBody(results, res, leverage = null) {
+export function importBody(results, res, leverage = null, cand = null) {
   const body = {
     format: 'fip-research-1', generatedAt: NOW, leverage,
+    // 사전 등록 후보: 통과한 것만(Worker 가 코드의 목록·공개 날짜로 다시 거름) + 모든 후보의 상태 한 줄
+    candidates: CANDIDATES.filter((s) => cand?.ledger?.[s.id]?.status === 'released').map((s) => ({ id: s.id, releasedAt: cand.ledger[s.id].at })),
+    candidateStatus: cand?.status && Object.keys(cand.status).length ? cand.status : null,
     backtests: Object.entries(results).map(([id, r]) => { const { curve, ...summary } = r; return { strategy_id: id, kind: 'wf', source: r.source, summary, curve }; }),
     variants: (res?.variants || []).map(({ summary, ...v }) => v),
     trials: res?.trials || null,
