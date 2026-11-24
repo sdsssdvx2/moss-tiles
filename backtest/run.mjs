@@ -124,8 +124,8 @@ function timeline(s, series) {
 
 /** Holdout start is FIXED once (frozen in holdout.json) so later runs cannot move it. */
 function holdoutFrom(key, tl, warm) {
-  // synthetic fixture data has its own dates: never mix it with the real frozen cut-offs
-  if (flag('--fixtures')) return tl[warm + Math.floor((tl.length - warm) * 0.75)];
+  // synthetic fixture data has its own dates: never mix it with the real frozen cut-offs (MOSS_SYNTHETIC=1: tests)
+  if (flag('--fixtures') || process.env.MOSS_SYNTHETIC === '1') return tl[warm + Math.floor((tl.length - warm) * 0.75)];
   const f = join(HERE, 'holdout.json');
   const j = existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : {};
   if (!j[key] && tl.length > warm + 50) {
@@ -244,11 +244,20 @@ export function dataYears(s, data) {
 }
 /** 판정까지 간 후보(연구실 시도 수에 들어감): released + rejected. */
 export const triedCandidates = (ledger) => CANDIDATES.filter((s) => ['released', 'rejected'].includes(ledger?.[s.id]?.status));
+/** 원장에는 있는데 코드 목록에서 빠진 판정(지워도 시도 수는 줄지 않게 따로 1씩 더함). */
+export const orphanTrials = (ledger) => Object.entries(ledger || {}).filter(([id, v]) => ['released', 'rejected'].includes(v?.status) && !CANDIDATES.some((s) => s.id === id)).length;
+/** 판정 자료 완결성: universe 의 모든 종목이 기준 종목과 같은 마지막 날까지 있어야 판정한다(수집이 빈 주에 영구 판정되지 않게). */
+export function dataComplete(s, data) {
+  const series = seriesFor(s, data);
+  const last = series[s.benchSym]?.at?.(-1)?.t;
+  if (!last) return false;
+  return (s.universe || []).every((x) => series[x]?.length && series[x][series[x].length - 1].t === last);
+}
 /**
  * 이번 실행에서 판정할 후보 고르기(순수). 공개 시각(KST 자정)이 지났고, 아직 판정 안 했고, 자료 기간이 관문 이상인 것.
  * 자료 기간이 모자라면 status 'no_data'(기록 안 함 → 다음 주 다시), 날짜 전이면 'waiting'.
  */
-export function dueCandidates(now, ledger, yearsOf, minYears = GATE_DEFAULTS.backtest.slowMinYears) {
+export function dueCandidates(now, ledger, yearsOf, minYears = GATE_DEFAULTS.backtest.slowMinYears, completeOf = () => true) {
   const due = [], status = {};
   for (const s of CANDIDATES) {
     const l = ledger?.[s.id];
@@ -256,6 +265,7 @@ export function dueCandidates(now, ledger, yearsOf, minYears = GATE_DEFAULTS.bac
     if (now < releaseAt(s)) { status[s.id] = { status: 'waiting', at: 0, note: `공개 ${s.releaseDate}` }; continue; }
     const y = yearsOf(s);
     if (y < minYears) { status[s.id] = { status: 'no_data', at: now, note: `자료 기간 ${y.toFixed(1)}년 < ${minYears}년 — 자료가 쌓이면 다시 봄` }; continue; }
+    if (!completeOf(s)) { status[s.id] = { status: 'no_data', at: now, note: '이번 주 일부 종목 시세가 마지막 날까지 없음(수집 실패) — 다음 주 다시' }; continue; }
     due.push(s);
   }
   return { due, status };
@@ -469,10 +479,10 @@ async function main() {
   if (flag('--research')) {
     // 날짜 주입(--candidates-as-of YYYY-MM-DD)은 가짜 자료(--fixtures)에서만 받는다
     const asOf = opt('--candidates-as-of') && flag('--fixtures') ? Date.parse(`${opt('--candidates-as-of')}T06:00:00+09:00`) / 1000 : NOW;
-    cand = { ...cand, ...dueCandidates(asOf, cand.ledger, (s) => dataYears(s, data)) };
+    cand = { ...cand, ...dueCandidates(asOf, cand.ledger, (s) => dataYears(s, data), undefined, (s) => dataComplete(s, data)) };
   }
   const candRegistry = [...triedCandidates(cand.ledger), ...cand.due];
-  LAB_TRIALS = labTrialsCount([...STRATEGIES, ...candRegistry]);
+  LAB_TRIALS = labTrialsCount([...STRATEGIES, ...candRegistry]) + orphanTrials(cand.ledger);
   log(`· 연구실 전체 시도 수(보정용): ${LAB_TRIALS}${candRegistry.length ? ` (사전 등록 후보 ${candRegistry.length}개 포함)` : ''}`);
   // registered weekly-research variants are re-evaluated too, so their evidence (risk-matched baseline etc.) stays current
   const releasedBefore = CANDIDATES.filter((s) => cand.ledger?.[s.id]?.status === 'released');

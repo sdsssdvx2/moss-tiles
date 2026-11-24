@@ -30,7 +30,7 @@ function positionsOf(state) {
 }
 
 // kv keys the overview needs (everything else in kv — cursors, backfill state, research trials — is skipped).
-const OVERVIEW_KV = ['family:members', 'criteria:log', 'ai:scorecard', 'ai:cross', 'decision:current', 'decision:log', 'paper:weekly', 'ai:consistency', 'research:leverage', 'variants', 'crypto:universe', 'sleeve:aggressive:stopped', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'cov:krx:1d', 'cov:crypto:1d', 'cov:crypto:1h', 'research:lastImport', 'research:lastError', 'research:checkedAt'];
+const OVERVIEW_KV = ['family:members', 'candidates:released', 'candidates:status', 'criteria:log', 'ai:scorecard', 'ai:cross', 'decision:current', 'decision:log', 'paper:weekly', 'ai:consistency', 'research:leverage', 'variants', 'crypto:universe', 'sleeve:aggressive:stopped', 'ready:krx:1d', 'ready:crypto:1d', 'ready:crypto:1h', 'cov:krx:1d', 'cov:crypto:1d', 'cov:crypto:1h', 'research:lastImport', 'research:lastError', 'research:checkedAt'];
 const parseKv = (rows) => { const o = {}; for (const r of rows) { try { o[r.k] = JSON.parse(r.v); } catch { o[r.k] = r.v; } } return o; };
 const btFromRow = (r) => ({ ...r, summary: JSON.parse(r.summary) });
 

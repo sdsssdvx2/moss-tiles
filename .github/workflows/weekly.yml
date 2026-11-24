@@ -27,9 +27,12 @@ jobs:
       - name: Research
         run: node backtest/run.mjs --research --export backtest/results/import.json
       - name: Commit results
+        # always(): a judged pre-registered candidate must be recorded even if a later step failed or timed out
+        # (otherwise next week would judge the same hold-out again). A failed push fails the job (visible).
+        if: always()
         run: |
           git config user.name "moss-bot"
           git config user.email "moss-bot@users.noreply.github.com"
           git add backtest/trials.json backtest/holdout.json backtest/variants.json backtest/candidates.json backtest/results/import.json backtest/results/latest-report-ko.md 2>/dev/null || true
           git commit -m "weekly $(date -u +%F)" || echo "nothing to commit"
-          git push || echo "push skipped"
+          git push || (git pull --rebase && git push)

@@ -74,7 +74,7 @@ export function allStrategies(kv) {
   const fam = memberStrategies(kv?.['family:members']);
   const famById = Object.fromEntries(fam.map((s) => [s.id, s]));
   const fixed = STRATEGIES.map((s) => (FAMILY_IDS.has(s.id) ? famById[s.id] : s));
-  return [...fixed, ...fam.filter((s) => !FAMILY_IDS.has(s.id)), ...variantStrategies(kv?.variants), ...candidateStrategies(kv?.['candidates:released'])];
+  return [...fixed, ...fam.filter((s) => !FAMILY_IDS.has(s.id)), ...variantStrategies(kv?.variants), ...candidateStrategies(kv?.['candidates:released'], new Set(Object.keys(byId)))];
 }
 /** 진행 중인 장부만(종료된 가족 장부 제외). 모의 진행·백테스트 작업용. */
 export const activeStrategies = (kv) => allStrategies(kv).filter((s) => !s.closed);

@@ -11,7 +11,7 @@ import { candidateById, candidateStrategies, releaseAt } from '../strategies/can
 export async function importResearch(env, body) {
   const kv = await kvAll(env.DB);
   const stmts = [];
-  const known = new Set([...Object.keys(staticById), ...variantStrategies(kv.variants).map((v) => v.id), ...candidateStrategies(kv['candidates:released']).map((c) => c.id)]);
+  const known = new Set([...Object.keys(staticById), ...variantStrategies(kv.variants).map((v) => v.id), ...candidateStrategies(kv['candidates:released'], new Set(Object.keys(staticById))).map((c) => c.id)]);
   // 사전 등록 후보: 주간 연구가 공개 날짜 뒤 과거 검증을 통과시킨 것만 온다. 코드에 있는 id·공개 날짜가 지난 것만 받는다(시계로 여는 게 아니라 거르기만).
   const nowSec = Math.floor(Date.now() / 1000);
   const released = Array.isArray(kv['candidates:released']) ? [...kv['candidates:released']] : [];
