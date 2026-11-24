@@ -246,3 +246,31 @@ export function decideAll(facts, { now, prev = null, criteria = null } = {}) {
   out.criteriaHash = criteria?.hash ?? null;
   return out;
 }
+
+// ---------------- 사전 등록 후보 첫 선발 (2026-11-24, #F-007 ②) ----------------
+// 공개된 후보는 변형과 똑같이 자동 선발 대상(같은 관문·같은 시도 수 보정). 처음 선발된 때만 '새 후보 <id> 선발'을 따로 알린다.
+
+/**
+ * changes = decideAll().changes (안전·공격 장부 모두), firstSelected = kv 'candidates:firstSelected' ({id: t}),
+ * isCandidate(id) = 사전 등록 후보인가. 이번에 처음 선발된 후보의 줄 앞에 '🧪 새 후보 <id> 선발 — '을 붙이고
+ * 새 firstSelected를 돌려준다(입력은 바꾸지 않음). 한 번 기록된 후보는 빠졌다 다시 들어와도 다시 붙이지 않는다.
+ */
+export function markFirstCandidateSelections(changes, firstSelected, isCandidate, now) {
+  const seen = { ...(firstSelected || {}) };
+  const fresh = new Set();
+  for (const c of changes || []) if (c.kind === 'add' && isCandidate(c.id) && !(c.id in seen)) fresh.add(c.id);
+  for (const id of fresh) seen[id] = now;
+  const out = (changes || []).map((c) => (c.kind === 'add' && fresh.has(c.id) ? { ...c, firstCandidate: true, text: `🧪 새 후보 ${c.id} 선발 — ${c.text}` } : c));
+  return { changes: out, firstSelected: seen, fresh: [...fresh] };
+}
+
+/**
+ * 주간 결론에 붙일 줄: 지난 주간 결론(sinceT) 뒤 처음 선발된 후보마다 한 줄. nameOf(id) = 이름.
+ * skip = 이미 결론 본문(weeklyText가 찍는 d.changes)에 '새 후보' 줄이 있는 id — 같은 줄을 두 번 쓰지 않음.
+ */
+export function newCandidateLines(firstSelected, sinceT, nameOf = (id) => id, skip = new Set()) {
+  return Object.entries(firstSelected || {})
+    .filter(([id, t]) => t > (sinceT || 0) && !skip.has(id))
+    .sort((a, b) => a[1] - b[1])
+    .map(([id]) => `🧪 새 후보 ${id} 선발 (${nameOf(id)}) — 사전 등록 후보가 처음으로 기준을 넘었어요. 실제 돈 연결은 공개 뒤 처음 보는 자료 기간을 따로 채운 다음에만 따져요.`);
+}

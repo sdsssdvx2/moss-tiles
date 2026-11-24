@@ -9,7 +9,7 @@ import { cryptoUniverse } from './collect.js';
 import { aiConfigured } from './ai.js';
 import { guardFor } from './market-signals.js';
 import { kstAt } from '../core/calendar.js';
-import { INITIAL_CASH, krxMeta, RULES_20261118_FROM } from '../config.js';
+import { INITIAL_CASH, krxMeta, RULES_20261118_FROM, CANDIDATE_ETFS } from '../config.js';
 import { mergeCosts } from '../core/costs.js';
 
 export function universeFor(strategy, kv) {
@@ -41,6 +41,21 @@ export async function signalsFor(env, strategy, from, toT) {
   };
 }
 
+/**
+ * 장부가 진행해도 되는 마지막 봉. 기본은 시장 전체 준비 표시(ready:<market>:<tf>).
+ * 후보용 새 ETF(CANDIDATE_ETFS)는 준비 표시를 기다리지 않고 수집되므로(collect.js coreKrxCodes), 그 종목을 쓰는
+ * 장부는 그 종목들의 수집 커서(krx:cur)까지로 묶는다 — 봉이 늦게 들어와 재생 일치가 깨지지 않게. 기존 장부는 그대로.
+ */
+export function readyFor(s, kv) {
+  const ready = kv[`ready:${s.market}:${s.timeframe}`];
+  if (!ready || s.market !== 'krx') return ready;
+  const late = (s.universe || []).filter((x) => x in CANDIDATE_ETFS);
+  if (!late.length) return ready;
+  if (late.some((x) => !kv[`bf:krx:${x}`])) return null; // 깊은 과거 시세를 채우기 전에는 시작하지 않음(나중에 채워져 재생이 달라지지 않게)
+  const cur = kv['krx:cur'] || {};
+  return Math.min(ready, ...late.map((x) => cur[x] || 0)) || null;
+}
+
 /** Advance one run by up to maxBars bars. Returns {run, fills, points, events} (not yet persisted). */
 export async function advanceRun(env, kv, strategy, run, toT, maxBars, { windowFrom = null } = {}) {
   const universe = universeFor(strategy, kv);
@@ -69,7 +84,7 @@ export async function advanceRun(env, kv, strategy, run, toT, maxBars, { windowF
 export async function paperTask(env, kv, now, { maxSteps = 2, strategies = activeStrategies(kv).filter((x) => !x.external) } = {}) {
   const runs = Object.fromEntries((await getRuns(env.DB)).map((r) => [r.id, r]));
   const changed = [];
-  const cands = strategies.map((s) => ({ s, run: runs[`${s.id}:paper`], ready: kv[`ready:${s.market}:${s.timeframe}`] }))
+  const cands = strategies.map((s) => ({ s, run: runs[`${s.id}:paper`], ready: readyFor(s, kv) }))
     .filter((x) => x.ready)
     .sort((a, b) => (a.run?.last_t ?? 0) - (b.run?.last_t ?? 0));
   const newRuns = [];
@@ -110,7 +125,7 @@ export async function workerBacktestTask(env, kv, now, { strategies = activeStra
   const runs = Object.fromEntries((await getRuns(env.DB)).map((r) => [r.id, r]));
   for (const s of strategies) {
     const id = `${s.id}:bt`;
-    const ready = kv[`ready:${s.market}:${s.timeframe}`];
+    const ready = readyFor(s, kv);
     const cov = kv[`cov:${s.market}:${s.timeframe}`]?.[s.benchSym || s.universe[0]];
     if (!ready || !cov) continue;
     let run = runs[id];
