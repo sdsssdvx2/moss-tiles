@@ -101,3 +101,25 @@ test('backfill: candidate symbols without history are backfilled one per tick (c
   const kv = await kvAll(env.DB);
   for (const c of CAND) { assert.equal(kv[`bf:krx:${c}`], 1, c); assert.ok(kv['cov:krx:1d'][c]?.min < TARGET - 300 * 86400, c); }
 });
+
+test('backfill: one candidate failing forever does not starve the others (6h backoff per symbol)', async () => {
+  const env = { DB: makeD1() };
+  await env.DB.batch(coreKrxCodes().map((c) => kvSetStmt(env.DB, `bf:krx:${c}`, 1)));
+  const f = mockFetch({ failSyms: new Set([CAND[0]]) });
+  for (let i = 0; i < CAND.length + 2; i++) await krxBackfillTask(env, await kvAll(env.DB), NOW + i * 600, { fetcher: f });
+  const kv = await kvAll(env.DB);
+  assert.ok(!kv[`bf:krx:${CAND[0]}`]);
+  for (const c of CAND.slice(1)) assert.equal(kv[`bf:krx:${c}`], 1, c);
+  assert.ok(kv[`fail:krxbf:${CAND[0]}`] > NOW);
+});
+
+test('health: candidate-only collection failures use a cand: source (shown, not a stall alarm)', async () => {
+  const env = { DB: makeD1() };
+  const f = mockFetch({ failSyms: new Set(CAND) });
+  await env.DB.batch(coreKrxCodes().map((c) => kvSetStmt(env.DB, `bf:krx:${c}`, 1)));
+  for (let i = 0; i < 6; i++) { await krxDailyTask(env, await kvAll(env.DB), NOW + i * 60, { fetcher: f }); await krxBackfillTask(env, await kvAll(env.DB), NOW + i * 60, { fetcher: f }); }
+  const rows = env.DB.raw.prepare('SELECT source, last_ok, last_err FROM data_health').all();
+  const failing = rows.filter((r) => r.last_err && r.last_err > (r.last_ok || 0)).map((r) => r.source);
+  assert.ok(failing.length && failing.every((s) => s.startsWith('cand:')), JSON.stringify(rows));
+  assert.ok(!failing.some((s) => /^(upbit:1[dh]|krx:|naver)/.test(s)));
+});

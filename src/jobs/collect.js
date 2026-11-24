@@ -14,7 +14,10 @@ export function cryptoUniverse(kv) {
 /** 기존 장부가 쓰는 종목: 이것만 수집 진행 조건(ready:krx:1d)과 공식 API 날짜 커서를 정한다. */
 export const coreKrxCodes = () => [...Object.keys(KRX_ETFS), ...Object.keys(KRX_STOCKS)];
 /** 수집 대상 전체: 후보용 새 ETF는 맨 뒤(틱당 대체 수집 몫에서 기존 종목이 먼저). */
-export const krxCodes = () => [...coreKrxCodes(), ...Object.keys(CANDIDATE_ETFS).filter((c) => !(c in KRX_ETFS) && !(c in KRX_STOCKS))];
+const isCandidateCode = (c) => c in CANDIDATE_ETFS && !(c in KRX_ETFS) && !(c in KRX_STOCKS);
+export const krxCodes = () => [...coreKrxCodes(), ...Object.keys(CANDIDATE_ETFS).filter(isCandidateCode)];
+/** 후보 종목의 수집 실패는 'cand:' 출처로 기록 → /health 는 보여 주기만 하고 멈춤 경보로 세지 않는다(health.js 정규식 밖). */
+const srcFor = (src, c) => (isCandidateCode(c) ? `cand:${src}` : src);
 
 function covKey(market, tf) { return `cov:${market}:${tf}`; }
 function mergeCov(cov, sym, bars) {
@@ -235,9 +238,9 @@ export async function krxDailyTask(env, kv, now, { perTick = 6, fetcher = fetch 
       await store(env, kv, 'krx', '1d', c, bars, src);
       cur[c] = target;
       did = true;
-      await healthOk(env.DB, src);
+      await healthOk(env.DB, srcFor(src, c));
     } catch (e) {
-      await healthErr(env.DB, env.DATA_GO_KR_KEY ? 'datagokr' : 'naver', e);
+      await healthErr(env.DB, srcFor(env.DATA_GO_KR_KEY ? 'datagokr' : 'naver', c), e);
       kv[failKey('krxfb', c)] = now + 30 * 60;
       extraStmts.push(kvSetStmt(env.DB, failKey('krxfb', c), kv[failKey('krxfb', c)]));
     }
@@ -288,7 +291,8 @@ export async function krxBackfillTask(env, kv, now, { perTick = 1, fetcher = fet
   const years = Number(env.KRX_BACKFILL_YEARS || 5);
   const floor = now - years * 365 * DAY;
   const cov = kv['cov:krx:1d'] || {};
-  const todo = krxCodes().filter((c) => (!cov[c] || cov[c].min > floor + 30 * DAY) && !kv[`bf:krx:${c}`]);
+  // 실패한 종목은 6시간 쉼 → 한 종목이 계속 실패해도 뒤 종목(후보 ETF)이 굶지 않게
+  const todo = krxCodes().filter((c) => (!cov[c] || cov[c].min > floor + 30 * DAY) && !kv[`bf:krx:${c}`] && !inBackoff(kv, 'krxbf', c, now));
   if (!todo.length) return false;
   if (!allowNaver(env) && !env.DATA_GO_KR_KEY) return false;
   let did = false;
@@ -300,7 +304,12 @@ export async function krxBackfillTask(env, kv, now, { perTick = 1, fetcher = fet
       kv[`bf:krx:${c}`] = 1;
       await store(env, kv, 'krx', '1d', c, bars, env.DATA_GO_KR_KEY ? 'datagokr' : 'naver', [kvSetStmt(env.DB, `bf:krx:${c}`, 1)]);
       did = true;
-    } catch (e) { await healthErr(env.DB, 'krx:backfill', e); break; }
+    } catch (e) {
+      await healthErr(env.DB, srcFor('krx:backfill', c), e);
+      kv[failKey('krxbf', c)] = now + 6 * HOUR;
+      await env.DB.batch([kvSetStmt(env.DB, failKey('krxbf', c), kv[failKey('krxbf', c)])]);
+      break;
+    }
   }
   return did;
 }
