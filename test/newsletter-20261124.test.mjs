@@ -44,7 +44,8 @@ function feedFetcher({ fail = [] } = {}) {
   };
 }
 
-test('newsletter feed: both sources, newest 3 per source, old and sponsored posts dropped, stored as type newsletter', async () => {
+test('newsletter feed: active sources only, newest 3 per source, old posts dropped, stored as type newsletter', async () => {
+  assert.equal(NEWSLETTER_SOURCES.find((s) => s.url.includes('glassnode')).off, 'Cloudflare 봇 확인(403)'); // 11-24 15:50 끔(운영 403)
   assert.deepEqual(NEWSLETTER_SOURCES.map((s) => s.url), ['https://uppity.co.kr/category/newsletter/feed', 'https://insights.glassnode.com/rss/']);
   const DB = makeD1();
   const kv = {};
@@ -53,13 +54,13 @@ test('newsletter feed: both sources, newest 3 per source, old and sponsored post
   assert.equal(await feedsTask({ DB }, kv, NOW, { fetcher: feedFetcher() }), true);
   const rows = DB.raw.prepare("SELECT source, sym, type, t, payload FROM feed_items ORDER BY t DESC").all();
   assert.deepEqual(rows.map((r) => [r.source, r.sym, r.type, JSON.parse(r.payload).title]), [
-    ['newsletter', '*krx', 'newsletter', '오늘 시장'], ['newsletter', '*krx', 'newsletter', '어제 시장'], ['newsletter', '*crypto', 'newsletter', 'Capitulation Meets Support']]);
+    ['newsletter', '*krx', 'newsletter', '오늘 시장'], ['newsletter', '*krx', 'newsletter', '어제 시장']]); // Glassnode는 꺼서 요청도 안 함
   assert.equal(JSON.parse(rows[0].payload).src, '어피티 머니레터');
   assert.equal(JSON.parse(rows[0].payload).text, '코스피 해설');
   // 다시 받아도 같은 글은 한 줄(PRIMARY KEY source,t,sym,payload)
   kv['feed:at:newsletter'] = 0;
   await feedsTask({ DB }, kv, NOW + 60, { fetcher: feedFetcher() });
-  assert.equal(DB.raw.prepare('SELECT COUNT(*) n FROM feed_items').get().n, 3);
+  assert.equal(DB.raw.prepare('SELECT COUNT(*) n FROM feed_items').get().n, 2);
   const h = DB.raw.prepare("SELECT * FROM data_health WHERE source = 'feed:newsletter'").get();
   assert.ok(h.last_ok && !h.last_err);
 });
@@ -69,15 +70,20 @@ test('newsletter feed: a single source failing is recorded per source (no longer
   const fetcher = async (url) => (url.includes('glassnode') ? new Response('blocked', { status: 403, headers: { 'cf-mitigated': 'challenge', server: 'cloudflare' } }) : feedFetcher()(url));
   const items = await NL.fetch(fetcher, { DB }, NOW);
   assert.equal(items.length, 2); // 어피티는 그대로 들어옴
-  const rows = Object.fromEntries(DB.raw.prepare("SELECT source, last_ok, last_err, err FROM data_health WHERE source LIKE 'feed:newsletter:%'").all().map((r) => [r.source, r]));
+  let rows = Object.fromEntries(DB.raw.prepare("SELECT source, last_ok, last_err, err FROM data_health WHERE source LIKE 'feed:newsletter:%'").all().map((r) => [r.source, r]));
   assert.ok(rows['feed:newsletter:uppity.co.kr'].last_ok && !rows['feed:newsletter:uppity.co.kr'].last_err);
-  assert.ok(rows['feed:newsletter:insights.glassnode.com'].last_err);
-  assert.match(rows['feed:newsletter:insights.glassnode.com'].err, /HTTP_403 cf-mitigated:challenge server:cloudflare/);
+  assert.ok(!rows['feed:newsletter:insights.glassnode.com']); // 꺼진 출처는 요청·기록 없음
+  // 켜져 있는 출처가 403이면 그 출처 줄에 상태가 남음(11-24 운영에서 Glassnode로 본 그대로)
+  const DB2 = makeD1();
+  await NL.fetch(async (url) => (url.includes('uppity') ? new Response('blocked', { status: 403, headers: { 'cf-mitigated': 'challenge', server: 'cloudflare' } }) : feedFetcher()(url)), { DB: DB2 }, NOW).catch(() => null);
+  rows = Object.fromEntries(DB2.raw.prepare("SELECT source, last_err, err FROM data_health WHERE source LIKE 'feed:newsletter:%'").all().map((r) => [r.source, r]));
+  assert.match(rows['feed:newsletter:uppity.co.kr'].err, /HTTP_403 cf-mitigated:challenge server:cloudflare/);
 });
 
 test('newsletter feed: one source down is fine; both down is a visible feed error', async () => {
   assert.equal((await NL.fetch(feedFetcher({ fail: ['glassnode'] }), {}, NOW)).length, 2);
   await assert.rejects(NL.fetch(feedFetcher({ fail: ['glassnode', 'uppity'] }), {}, NOW), /NEWSLETTER_ALL_FAILED/);
+  await assert.rejects(NL.fetch(feedFetcher({ fail: ['uppity'] }), {}, NOW), /NEWSLETTER_ALL_FAILED/); // 켜진 출처가 모두 실패
 });
 
 // ---------------- 비교 장부 입력 ----------------
