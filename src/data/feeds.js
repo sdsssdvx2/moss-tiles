@@ -2,6 +2,7 @@
 //   { source, t (epoch s), sym ('*' = market-wide), type, payload (object), fetched_at }
 // Health is tracked per source in data_health ('feed:<id>'). All feeds are optional and cheap.
 import { DAY, HOUR } from '../core/calendar.js';
+import { healthOk, healthErr } from '../db/store.js';
 
 const decodeXml = (s) => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
 
@@ -23,7 +24,10 @@ export function parseRssTitles(xml, max = 15) {
 // 어피티 피드는 한 번에 약 1.4MB → 앞에서 몇 건만 읽고 끊는다(CPU·메모리).
 export const NEWSLETTER_SOURCES = Object.freeze([
   Object.freeze({ sym: '*krx', name: '어피티 머니레터', url: 'https://uppity.co.kr/category/newsletter/feed' }),
-  Object.freeze({ sym: '*crypto', name: 'Glassnode', url: 'https://insights.glassnode.com/rss/', skip: /\+\s*Glassnode|Glassnode\s*\+|sponsored/i }), // 제휴·홍보 글('X + Glassnode') 제외
+  Object.freeze({ sym: '*crypto', name: 'Glassnode', url: 'https://insights.glassnode.com/rss/', skip: /\+\s*Glassnode|Glassnode\s*\+|sponsored/i,
+    // 2026-11-24 15:50 운영: Cloudflare Worker에서 HTTP 403 cf-mitigated:challenge(봇 확인) — PC에서는 됨. 다른 코인 뉴스레터 RSS(Bankless·The Defiant·Galaxy·Decrypt·Bitcoin Magazine·Cointelegraph)도
+    // Cloudflare 뒤, 봇 확인 없는 곳은 Kraken 블로그(광고·상장 공지)·CoinDesk(뉴스 — 뉴스 제목 피드와 겹침)뿐 → 끔. 매일 '데이터 문제'로 찍히지 않게.
+    off: 'Cloudflare 봇 확인(403)' }), // 제휴·홍보 글('X + Glassnode') 제외
 ]);
 export const NEWSLETTER_KEEP_DAYS = 14; // Glassnode는 1~3주 간격이라 2주 안의 글을 둔다
 const stripHtml = (s) => decodeXml(String(s)).replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n))).replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
@@ -187,20 +191,28 @@ export const FEEDS = [
     },
   },
   {
-    id: 'newsletter', name: '뉴스레터(어피티 머니레터·Glassnode — 공시·뉴스레터 비교 장부에만 씀)', every: 12 * HOUR, needs: null,
+    id: 'newsletter', name: '뉴스레터(어피티 머니레터 — 공시·뉴스레터 비교 장부에만 씀)', every: 12 * HOUR, needs: null,
     async fetch(fetcher, env, now) {
       const items = [], errors = [];
-      for (const src of NEWSLETTER_SOURCES) {
+      const active = NEWSLETTER_SOURCES.filter((x) => !x.off);
+      for (const src of active) {
+        // 2026-11-24 운영 첫 수집: 어피티 3건, Glassnode 0건(PC에서는 됨) — 한 출처만 실패하면 조용했다 → 출처마다 data_health 'feed:newsletter:<host>'
+        const hk = `feed:newsletter:${src.url.split('/')[2]}`;
         try {
           const res = await fetcher(src.url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; family-invest-paper/2; personal non-commercial, twice a day)', accept: 'application/rss+xml, application/xml' } });
-          if (!res.ok) throw new Error(String(res.status));
+          if (!res.ok) throw new Error(`HTTP_${res.status}${res.headers?.get?.('cf-mitigated') ? ` cf-mitigated:${res.headers.get('cf-mitigated')}` : ''}${res.headers?.get?.('server') ? ` server:${String(res.headers.get('server')).slice(0, 20)}` : ''}`);
+          let n = 0;
           for (const it of parseRssItems(await readRssHead(res, 3), 3)) {
             if (!it.title || !it.t || src.skip?.test(it.title) || it.t < now - NEWSLETTER_KEEP_DAYS * DAY || it.t > now + HOUR) continue;
-            items.push({ sym: src.sym, t: it.t, type: 'newsletter', payload: { src: src.name, title: it.title, text: it.text } });
+            items.push({ sym: src.sym, t: it.t, type: 'newsletter', payload: { src: src.name, title: it.title, text: it.text } }); n++;
           }
-        } catch (e) { errors.push(`${src.url.split('/')[2]}:${String(e?.message || e).slice(0, 20)}`); }
+          if (env?.DB) await healthOk(env.DB, hk);
+        } catch (e) {
+          errors.push(`${src.url.split('/')[2]}:${String(e?.message || e).slice(0, 20)}`);
+          if (env?.DB) await healthErr(env.DB, hk, e);
+        }
       }
-      if (errors.length === NEWSLETTER_SOURCES.length) throw new Error(`NEWSLETTER_ALL_FAILED ${errors.join(',')}`.slice(0, 120));
+      if (errors.length === active.length) throw new Error(`NEWSLETTER_ALL_FAILED ${errors.join(',')}`.slice(0, 120));
       return items;
     },
   },
