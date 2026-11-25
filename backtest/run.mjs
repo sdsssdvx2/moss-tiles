@@ -25,7 +25,7 @@ import { KRX_ALL, krxMeta, CRYPTO_CORE, CRYPTO_HOURLY, RETENTION } from '../src/
 import { downsample } from '../src/db/store.js';
 import { SEARCH_SPACES, VARIANTS_PER_FAMILY_PER_RUN } from './search-spaces.mjs';
 import { llmIdeas } from './llm-ideas.mjs';
-import { CANDIDATES, releaseAt } from '../src/strategies/candidates.js';
+import { ALL_CANDIDATES as CANDIDATES, releaseAt } from '../src/strategies/candidates.js'; // 대기열 전체(앞 8개 + 규칙 문법 순서표 20개, #F-009 ③)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CACHE = join(HERE, '.cache');

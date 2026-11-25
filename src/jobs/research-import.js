@@ -16,9 +16,11 @@ export async function importResearch(env, body) {
   const nowSec = Math.floor(Date.now() / 1000);
   const released = Array.isArray(kv['candidates:released']) ? [...kv['candidates:released']] : [];
   let addedCandidates = 0;
-  for (const c of (Array.isArray(body?.candidates) ? body.candidates : []).slice(0, 10)) {
+  // 실행기는 지금까지 통과한 후보 전체를 누적으로 보낸다 → 이미 받은 것은 건너뛰고 '새로 받는 것'만 한 번에 10개까지(11-24 레드팀 1: 앞 10개만 보던 것)
+  for (const c of (Array.isArray(body?.candidates) ? body.candidates : []).slice(0, 60)) {
     const s = candidateById[c?.id];
     if (!s || known.has(s.id) || releaseAt(s) > nowSec) continue;
+    if (addedCandidates >= 10) break;
     released.push({ id: s.id, releasedAt: nowSec });
     known.add(s.id); addedCandidates++;
     stmts.push(env.DB.prepare('INSERT INTO events (t, kind, strategy_id, message, notified) VALUES (?,?,?,?,0)').bind(nowSec, 'stage', s.id, `🧪 사전 등록 후보 ${s.name} 공개 — 과거 검증(시도 수 보정) 통과, 오늘부터 가상 돈 모의 검증 시작`));
@@ -26,7 +28,7 @@ export async function importResearch(env, body) {
   if (addedCandidates) stmts.push(kvSetStmt(env.DB, 'candidates:released', released));
   if (body?.candidateStatus && typeof body.candidateStatus === 'object') {
     const st = {};
-    for (const [id, v] of Object.entries(body.candidateStatus).slice(0, 20)) if (candidateById[id]) st[id] = { status: String(v?.status || '').slice(0, 20), note: String(v?.note || '').slice(0, 200), at: Number(v?.at) | 0 };
+    for (const [id, v] of Object.entries(body.candidateStatus).slice(0, 40)) if (candidateById[id]) st[id] = { status: String(v?.status || '').slice(0, 20), note: String(v?.note || '').slice(0, 200), at: Number(v?.at) | 0 };
     // 미통과·자료 부족도 12-15 뒤 사람이 보게: 상태가 바뀐 주에만 이벤트 한 줄(텔레그램 요약으로 나감). 통과는 위에서 따로.
     const prev = kv['candidates:status'] || {};
     const word = { rejected: '과거 검증 미통과(다시 고르지 않음, 시도 수에는 남음)', no_data: '자료 부족 — 다음 주 다시 봄' };
