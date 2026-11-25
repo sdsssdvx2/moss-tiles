@@ -38,6 +38,22 @@ const btFromRow = (r) => ({ ...r, summary: JSON.parse(r.summary) });
  * Dashboard JSON. Two D1 round trips (one batch for everything + one for the equity curves);
  * no backtest curves (the dashboard does not draw them), only the kv keys it shows.
  */
+/**
+ * 모의 장부 평가액 곡선(하루 한 점). 2026-11-25 #F-014: 예전 쿼리(run_id LIKE '%:paper')는 기본 키를 못 써서 평가액 표 전체
+ * (재검증 장부 포함, 11-25 2,793행)를 훑었다 → 모의 장부 id 목록으로 기본 키(run_id, t)를 따라 읽는다(같은 행, 같은 순서).
+ * 모의 장부가 아닌 평가액 행·runs에 없는 ':paper' 행(운영 11-25 0행 — 평가액은 장부가 있을 때만 쓰이고 지울 때 같이 지움)은 원래도 화면에 안 쓰임.
+ */
+export async function paperCurves(db, runIds) {
+  const curves = {};
+  const ids = [...new Set(runIds)].sort();
+  for (let i = 0; i < ids.length; i += 90) { // D1 바인딩 변수 100개 제한
+    const part = ids.slice(i, i + 90);
+    const { results } = await db.prepare(`SELECT run_id, t, equity, bench, invested FROM equity WHERE run_id IN (${part.map(() => '?').join(',')}) AND (t % 86400) = 0 ORDER BY run_id, t`).bind(...part).all();
+    for (const p of results) (curves[p.run_id] ||= []).push(p);
+  }
+  return curves;
+}
+
 export async function overview(env, now = Math.floor(Date.now() / 1000)) {
   const db = env.DB;
   const kvIn = OVERVIEW_KV.map(() => '?').join(',');
@@ -65,11 +81,7 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
   const gates = gatesFrom(env);
   // Equity curves for every paper run in ONE query. Daily points are stored at UTC midnight (KST date
   // label), so `t % 86400 = 0` keeps every daily point and one point per day for hourly runs.
-  const curves = {};
-  if (runs.length) {
-    const { results } = await db.prepare("SELECT run_id, t, equity, bench, invested FROM equity WHERE run_id LIKE '%:paper' AND (t % 86400) = 0 ORDER BY run_id, t").all();
-    for (const p of results) (curves[p.run_id] ||= []).push(p);
-  }
+  const curves = runs.length ? await paperCurves(db, runs.map((r) => r.id)) : {};
   const strategies = [];
   const ALL = allStrategies(kv);
   for (const s of ALL) {
