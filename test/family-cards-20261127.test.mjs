@@ -102,7 +102,7 @@ test('family tab: account card (equity, invested bar with cap tick, buy-and-hold
   assert.match(h, /투자 비율 <b>0%<\/b> · 상한 35%/);
   assert.match(h, /KODEX 200TR을 그냥 들고 있었으면 <b class="down">-7\.9%<\/b>/);
   assert.match(h, /11-26 종가 기준/);
-  assert.match(h, /KODEX 200TR<\/b> — <span class="">안 삼 — 안 맞는 조건: vol 조건/);
+  assert.match(h, /KODEX 200TR<\/b> — <span class="">안 삼 — 변동성 3\.60%\(3\.5% 이하여야\)/); // 11-27 문구 짧게(진행.md에 이유)
   assert.match(h, /사는 조건 하나씩 보기/);
   assert.match(h, /<span class="ck no">✗<\/span>vol 조건/);
   assert.match(h, /아직 없어요 — 사는 조건이 맞은 날이 없었어요/);
@@ -110,7 +110,7 @@ test('family tab: account card (equity, invested bar with cap tick, buy-and-hold
   const top = vm.runInContext('famNow()', ctx);
   assert.match(top, /가족 장부 지금/);
   assert.match(top, /data-gotab="family"/);
-  assert.match(top, /KODEX 200TR 안 삼\(안 맞음: vol 조건\)/);
+  assert.match(top, /KODEX 200TR 안 삼\(변동성 3\.60%\(3\.5% 이하여야\)\)/); // 11-27 문구 짧게(진행.md에 이유)
 });
 
 test('family tab: BUY picks only the higher score, held symbol says hold, a full cap says no room', () => {
@@ -136,4 +136,16 @@ test('family tab still renders without the new field (old cache) and for a book 
   ctx.d = data({ paperNull: true });
   assert.match(vm.runInContext('DATA=d; viewFamily()', ctx), /새 장부가 다음 거래일부터 시작해요/);
   assert.match(vm.runInContext('famNow()', ctx), /다음 거래일부터 시작/);
+});
+
+test('phone width: tiles show 만 원, a symbol failing many conditions shows two and "외 N개" (full list stays in the rules card)', () => {
+  const ctx = vmCtx();
+  ctx.d = data();
+  ctx.d.familyToday.syms[1].checks = ctx.d.familyToday.syms[1].checks.map((c) => ({ ...c, ok: false }));
+  const h = vm.runInContext('DATA=d; viewFamily()', ctx);
+  assert.match(h, /<div class="k">원금<\/div><div class="v num">10만 원<\/div>/);
+  assert.match(h, /KODEX 200TR<\/b> — <span class="">안 삼 — 60일 수익률 -5\.0%\(\+2\.5% 넘어야\) · 변동성 3\.60%\(3\.5% 이하여야\) 외 3개/);
+  assert.equal((h.match(/<span class="ck no">✗<\/span>/g) || []).length, 6); // 하나씩 보기 카드엔 전부(1 + 5)
+  assert.match(vm.runInContext('manw(1000000)+"|"+manw(35000)+"|"+manw(9000)', ctx), /^100만 원\|3\.5만 원\|9,000원$/);
+  assert.match(dashboardHtml(), /\.fam \.mrow input\{width:100%\}/);
 });

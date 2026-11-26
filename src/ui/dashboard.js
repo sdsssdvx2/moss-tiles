@@ -50,7 +50,7 @@ button.ghost{background:none;border:1px solid var(--line);color:var(--ink2);bord
 .qchips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.qchips button{border:1px solid var(--line);background:var(--chip);color:var(--ink2);border-radius:999px;padding:6px 11px;font:inherit;font-size:12.5px;cursor:pointer}
 .chat{display:grid;gap:8px;margin-top:10px}.msg{border-radius:14px;padding:9px 12px;font-size:14px;white-space:pre-wrap;line-height:1.55}.msg.q{background:var(--brand-soft);color:var(--ink);justify-self:end;max-width:88%}.msg.a{background:var(--chip);color:var(--ink);max-width:96%}.msg .meta{margin-top:4px}
 .books{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}.books .bk{background:var(--chip);border-radius:12px;padding:9px 10px;border:2px solid transparent}.books .bk.rec{border-color:var(--ok)}.books .bk .t{font-size:12.5px;font-weight:800}.books .bk .v{font-size:13px;color:var(--ink2);margin-top:2px}
-.fam .mrow{display:grid;grid-template-columns:1fr 110px;gap:6px;align-items:center;margin:8px 0}.fam .acts{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 12px}.fam label.s{font-size:11.5px;color:var(--muted);display:block;margin-bottom:2px}
+.fam .mrow{display:grid;grid-template-columns:1fr 110px;gap:6px;align-items:center;margin:8px 0}.fam .mrow input{width:100%}.fam .acts{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 12px}.fam label.s{font-size:11.5px;color:var(--muted);display:block;margin-bottom:2px}
 button.danger{background:none;border:1px solid var(--bad);color:var(--bad);border-radius:10px;padding:6px 10px;font:inherit;font-size:12px;cursor:pointer}
 @media (max-width:520px){.books{grid-template-columns:1fr}}
 .famc .big{font-size:22px;font-weight:800;letter-spacing:-.4px;white-space:nowrap}.capbar{position:relative;margin-top:10px}.capbar .cap{position:absolute;top:-3px;width:2px;height:14px;margin-left:-1px;background:var(--ink);border-radius:1px}
@@ -177,12 +177,15 @@ function viewRules(){const C=DATA.criteria;if(!C)return '<div class="card"><div 
   return h+'</div>'}
 // ---- 2026-11-27 #F-016: 가족 장부 사람별 카드(PC 봇 계좌 화면에서 옮김) + 마지막 종가 기준 판단 근거 ----
 const FCK={above60:v=>'60일 평균보다 '+pct(v),trend:v=>'20일 평균이 60일 평균보다 '+pct(v),mom:v=>'60일 '+pct(v),vol:v=>'하루 평균 '+pabs(v,2)+' 움직임',jump:v=>'전날보다 '+pct(v)};
+const FBAD={mom:v=>'60일 수익률 '+pct(v)+'(+2.5% 넘어야)',vol:v=>'변동성 '+pabs(v,2)+'(3.5% 이하여야)',above60:v=>'60일 평균보다 '+pct(v),trend:v=>'20일 평균이 60일 평균 아래',jump:v=>'전날 '+pct(v)+'(±6% 안이어야)'};
+function famBad(x,max){const o=['mom','vol','above60','trend','jump'];const b=(x.checks||[]).filter(c=>!c.ok).sort((a,c)=>o.indexOf(a.key)-o.indexOf(c.key));return b.slice(0,max).map(c=>(FBAD[c.key]||pct)(c.value)).join(' · ')+(b.length>max?' 외 '+(b.length-max)+'개':'')}
+const manw=n=>n==null?'-':n>=10000?(Math.round(n/1000)/10).toLocaleString('ko-KR')+'만 원':Math.round(n).toLocaleString('ko-KR')+'원';
 function famSig(){const F=DATA.familyToday;return F&&Array.isArray(F.syms)&&F.syms.length?F:null}
 function famVerdict(x,held,top,room){if(!x.checks||!x.checks.length)return ['판단할 자료 부족',''];
   if(held)return x.sig==='SELL'?['파는 조건 — 다음 거래일 시가에 팖','sell']:['계속 보유(더 사지는 않음)',''];
   if(x.sig==='BUY')return room!=null&&room<=0.02?['사는 조건 맞음 — 투자 상한이 차서 안 삼','']:top?['사는 조건 맞음 — 다음 거래일 시가에 삼','buy']:['사는 조건 맞음 — 같은 날엔 점수 높은 한 종목만 사서 이번엔 안 삼',''];
   if(x.sig==='WAIT')return ['오늘은 보류(전날 ±6% 넘게 움직임)',''];
-  const bad=x.checks.filter(c=>!c.ok).map(c=>c.need);return ['안 삼 — 안 맞는 조건: '+bad.join(', '),'']}
+  return ['안 삼 — '+famBad(x,2),'']}
 function famTop(F,held){const b=F.syms.filter(x=>x.sig==='BUY'&&!(held&&held.has(x.sym))).sort((a,c)=>c.score-a.score);return b.length?b[0].sym:null}
 function famWhen(F){const t=F.syms.map(x=>x.t).filter(Boolean);return t.length?day(Math.max.apply(null,t)).slice(5)+' 종가 기준':'종가 기준'}
 function famBook(m){return DATA.strategies.find(s=>s.id===m.bookId)}
@@ -193,7 +196,7 @@ function famCard(m,F){const s=famBook(m),p=s&&s.paper;let h='<div class="card fa
   if(p.halted)h+='<div class="notice">⛔ 위험중단: '+esc(p.haltReason||'고점 대비 손실 한도')+' — 20거래일 쉬고 처음부터 다시 시작해요.</div>';
   h+='<div class="capbar" aria-label="투자 비율 '+pabs(inv,0)+', 상한 '+pabs(cap,0)+'"><div class="bar"><span style="width:'+(inv*100).toFixed(1)+'%"></span></div>'+(cap!=null?'<i class="cap" style="left:'+(cap*100).toFixed(1)+'%"></i>':'')+'</div>';
   h+='<div class="meta" style="margin-top:4px">투자 비율 <b>'+pabs(inv,0)+'</b>'+(cap!=null?' · 상한 '+pabs(cap,0)+'(나머지는 늘 현금)':'')+'</div>';
-  h+='<div class="stats"><div><div class="k">원금</div><div class="v num">'+won(p.initial)+'</div></div><div><div class="k">현금</div><div class="v num">'+won(p.cash)+'</div></div><div><div class="k">보유</div><div class="v num">'+(s.positions||[]).length+'종목</div></div><div><div class="k">가상 거래</div><div class="v num">'+(p.fills||0)+'번</div></div></div>';
+  h+='<div class="stats"><div><div class="k">원금</div><div class="v num">'+manw(p.initial)+'</div></div><div><div class="k">현금</div><div class="v num">'+manw(p.cash)+'</div></div><div><div class="k">보유</div><div class="v num">'+(s.positions||[]).length+'종목</div></div><div><div class="k">가상 거래</div><div class="v num">'+(p.fills||0)+'번</div></div></div>';
   h+='<div class="meta" style="margin-top:6px">같은 기간('+day(p.startT)+'부터) KODEX 200TR을 그냥 들고 있었으면 <b class="'+cls(p.benchRet)+'">'+pct(p.benchRet)+'</b></div>';
   if((s.positions||[]).length)h+='<h3>보유</h3><table>'+s.positions.map(x=>'<tr><td>'+esc(x.name)+'</td><td class="r num">'+won(x.value)+'</td><td class="r num">'+pabs(x.weight,0)+'</td><td class="r num '+cls(x.pnlPct)+'">'+pct(x.pnlPct)+'</td></tr>').join('')+'</table>';
   const held=new Set((s.positions||[]).map(x=>x.sym));
@@ -209,7 +212,7 @@ function famRules(F){if(!F)return '<div class="card"><h3 style="margin-top:0">�
   return h+'</div>'}
 function famNow(){const M=DATA.members,F=famSig();if(!M||!M.members||!M.members.length)return '';
   const rows=M.members.map(m=>{const s=famBook(m),p=s&&s.paper;if(!p)return '<div class="reason"><b>'+esc(m.label)+'</b> — 다음 거래일부터 시작</div>';const inv=p.equity>0?(p.equity-p.cash)/p.equity:0;return '<div class="reason"><b>'+esc(m.label)+'</b> 가상 '+won(p.equity)+' <span class="num '+cls(p.ret)+'">'+pct(p.ret)+'</span> · 투자 '+pabs(inv,0)+' · 같은 기간 KODEX 200TR 그냥 보유 <span class="num '+cls(p.benchRet)+'">'+pct(p.benchRet)+'</span></div>'}).join('');
-  let why='';if(F){const top=famTop(F);why='<div class="meta" style="margin-top:4px">'+esc(famWhen(F))+': '+F.syms.map(x=>esc(x.name)+' '+(x.sig==='BUY'?(x.sym===top?'사는 조건 맞음':'조건 맞음(한 종목만 삼)'):x.sig==='WAIT'?'보류':'안 삼(안 맞음: '+esc((x.checks||[]).filter(c=>!c.ok).map(c=>c.need).join(', ')||x.reason||'')+')')).join(' · ')+'</div>'}
+  let why='';if(F){const top=famTop(F);why='<div class="meta" style="margin-top:4px">'+esc(famWhen(F))+': '+F.syms.map(x=>esc(x.name)+' '+(x.sig==='BUY'?(x.sym===top?'사는 조건 맞음':'조건 맞음(한 종목만 삼)'):x.sig==='WAIT'?'보류':'안 삼('+esc(famBad(x,1)||x.reason||'')+')')).join(' · ')+'</div>'}
   return '<div class="card"><div class="row"><div class="grow"><div class="name">가족 장부 지금</div></div><button class="ghost" type="button" data-gotab="family">자세히</button></div>'+rows+why+'</div>'}
 function viewFamily(){const M=DATA.members;if(!M)return '<div class="card"><div class="empty">가족 설정을 불러오는 중이에요.</div></div>';const P=M.profiles||{};
   const st=id=>DATA.strategies.find(s=>s.id===id);
