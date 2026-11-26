@@ -149,3 +149,30 @@ test('phone width: tiles show 만 원, a symbol failing many conditions shows tw
   assert.match(vm.runInContext('manw(1000000)+"|"+manw(35000)+"|"+manw(9000)', ctx), /^100만 원\|3\.5만 원\|9,000원$/);
   assert.match(dashboardHtml(), /\.fam \.mrow input\{width:100%\}/);
 });
+
+test('family recent orders are read per book (not pushed out by the shared 60-row list), and the "no buy day" line only shows when true', async () => {
+  const DB = makeD1(); seedCandles(DB, false);
+  const fill = DB.raw.prepare("INSERT INTO fills (run_id, t, seq, sym, side, qty, price, gross, fee, tax, pnl, reason, cash) VALUES (?,?,1,?,'BUY',1,100,100,0,0,0,'r',1)");
+  fill.run('family_self_v1:paper', NOW - 20 * DAY, '278530');
+  fill.run('family_self_v1:paper', NOW - 19 * DAY, '379800');
+  for (let i = 0; i < 70; i++) fill.run('etf_trend_v1:paper', NOW - 10 * DAY + i * 60, '069500');
+  const o = await overview({ DB }, NOW);
+  assert.equal(o.familyToday.recent.family_self_v1.length, 2);
+  assert.equal(o.familyToday.recent.family_self_v1[0].sym, '379800'); // 최근 것 먼저
+  assert.equal(o.familyToday.recent.family_self_v1[0].name, 'KODEX 미국S&P500TR');
+  assert.deepEqual(o.familyToday.recent.family_mother_v1, []);
+
+  const ctx = vmCtx();
+  // 보유 중(거래 1번)인데 화면 전체 목록에서는 밀려난 경우 → 가족 장부 따로 읽은 주문을 보여 주고 '맞은 날 없음'이라고 하지 않음
+  ctx.d = data({ held: true, invested: 35000 });
+  ctx.d.familyToday.recent = { family_self_v1: [{ t: NOW - 5 * DAY, sym: '278530', side: 'BUY', qty: 1, price: 35000, reason: 'r', name: 'KODEX 200TR' }] };
+  let h = vm.runInContext('DATA=d; viewFamily()', ctx);
+  assert.match(h, /<span class="side buy">삼<\/span> KODEX 200TR<\/td><td class="r num">35,000원/);
+  assert.ok(!/사는 조건이 맞은 날이 없었어요/.test(h));
+  assert.match(h, /<h3>최근 판단 <span class="s">11-26 종가 기준/);
+  // 거래 0번이지만 오늘 사는 조건이 맞은 날 → '맞은 날 없음' 대신 '최근 기록에 없어요'
+  ctx.d = data({ F: 'buy' });
+  h = vm.runInContext('DATA=d; viewFamily()', ctx);
+  assert.ok(!/사는 조건이 맞은 날이 없었어요/.test(h));
+  assert.match(h, /최근 기록에 없어요/);
+});

@@ -165,14 +165,20 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
  * 가족 장부 규칙(familySignal)을 마지막 일봉 종가로 돌린 결과 — 화면의 '오늘 판단 근거'.
  * 장부가 거래할 때 쓰는 것과 같은 함수·같은 길이(70개)의 종가. 종목은 가족 장부의 universe에서 가져온다.
  * 읽는 행: 종목당 70개(PK 순서). 실패하면 null(화면은 '불러오는 중'으로).
+ * recent: 가족 장부마다 최근 가상 체결 5건(PK 순서). 화면 전체의 최근 체결 60건은 다른 장부 체결에 밀려 가족 주문이 빠질 수 있어서 따로 읽는다.
  */
 export async function familyTodayView(db, strategies) {
   try {
-    const fam = strategies.find((s) => s.memberBook || /^family_/.test(s.id));
+    const books = strategies.filter((s) => s.memberBook || /^family_/.test(s.id));
+    const fam = books[0];
     if (!fam) return null;
     const syms = [...new Set(fam.universe || [])];
-    const rows = await db.batch(syms.map((sym) => db.prepare("SELECT t, c FROM candles WHERE market = 'krx' AND tf = '1d' AND sym = ? ORDER BY t DESC LIMIT 70").bind(sym)));
+    const rows = await db.batch([
+      ...syms.map((sym) => db.prepare("SELECT t, c FROM candles WHERE market = 'krx' AND tf = '1d' AND sym = ? ORDER BY t DESC LIMIT 70").bind(sym)),
+      ...books.map((b) => db.prepare('SELECT t, sym, side, qty, price, reason FROM fills WHERE run_id = ? ORDER BY t DESC, seq DESC LIMIT 5').bind(`${b.id}:paper`)),
+    ]);
     return {
+      recent: Object.fromEntries(books.map((b, i) => [b.id, rows[syms.length + i].results.map((f) => ({ ...f, name: symName(f.sym) }))])),
       syms: syms.map((sym, i) => {
         const r = rows[i].results.slice().reverse();
         const closes = r.map((x) => x.c);
