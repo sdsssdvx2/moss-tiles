@@ -78,3 +78,12 @@ test('no ledgers / DB error -> no ledger lines, answer still works', async () =>
   const r = await ask({ DB }, {}, '수익률 어때?', NOW);
   assert.match(r.answer, /아직 가상 장부의 평가 기록이 없어요/);
 });
+
+test('ledger lines give the plain average of traded books, so the AI does not invent one', async () => {
+  const DB = makeD1(); seed(DB);
+  const lg = await ledgerSummary({ DB }, {}, NOW);
+  const want = ((10682694 / 1e7 - 1) + (9117715 / 1e7 - 1) + (9383541 / 1e7 - 1)) / 3;
+  assert.ok(Math.abs(lg.avg - want) < 1e-12);
+  const all = factLines({ members: { members: [], profiles: {} }, ai: [], trades: [], ledgers: lg, now: NOW }).join(' | ');
+  assert.match(all, /거래한 장부 3개의 단순 평균 가상 수익: -2\.7%/); // (+6.83 − 8.82 − 6.16) / 3
+});

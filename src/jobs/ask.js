@@ -68,7 +68,7 @@ export async function ledgerSummary(env, kv, now) {
         if (last) familySig.today.push(`${symName(sym)} ${last[0] === 'BUY' ? '사는 조건 맞음' : last[2]}`);
       }
     }
-    return { n: rows.length, traded: traded.length, idle: rows.length - traded.length, best: traded[0] || null, worst: traded.at(-1) || null,
+    return { n: rows.length, traded: traded.length, idle: rows.length - traded.length, best: traded[0] || null, worst: traded.at(-1) || null, avg: traded.length ? traded.reduce((a, r) => a + r.ret, 0) / traded.length : null,
       krxHold: hold(/^krx_bh_/), cryptoHold: hold(/^crypto_bh_/), family: fam, familySig };
   } catch (_) { return null; }
 }
@@ -77,6 +77,7 @@ function ledgerLines(lg, now) {
   if (!lg) return [];
   const L = [`가상 장부 ${lg.n}개 중 ${lg.traded}개가 실제로 가상 거래를 했고, ${lg.idle}개는 사는 조건이 한 번도 안 맞아 현금으로 기다려서 수익이 0%예요(잃지도 벌지도 않음)`];
   if (lg.best) L.push(`가장 좋은 장부: ${lg.best.name} ${p1(lg.best.ret)} / 가장 나쁜 장부: ${lg.worst.name} ${p1(lg.worst.ret)} (모의 시작부터 지금까지, 가상 돈)`);
+  if (lg.avg != null) L.push(`거래한 장부 ${lg.traded}개의 단순 평균 가상 수익: ${p1(lg.avg)} (장부마다 시작일이 조금씩 달라요)`);
   const h = [lg.krxHold && `국내 주식 ETF(KODEX 200TR) ${p1(lg.krxHold.ret)}`, lg.cryptoHold && `비트코인 ${p1(lg.cryptoHold.ret)}`].filter(Boolean);
   if (h.length) L.push(`같은 기간 아무 판단 없이 그냥 사서 들고 있었으면: ${h.join(', ')}`);
   if (lg.family.length) {
