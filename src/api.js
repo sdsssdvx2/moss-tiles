@@ -12,6 +12,7 @@ import { FEEDS } from './data/feeds.js';
 import { marketSignalsView } from './jobs/market-signals.js';
 import { membersView } from './core/members.js';
 import { criteriaView } from './core/criteria.js';
+import { familySignalDetail } from './strategies/family.js';
 
 const r4 = (x) => Math.round(x * 10000) / 10000;
 
@@ -113,6 +114,7 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
       universe: universeFor(s, kv).map((x) => ({ sym: x, name: symName(x) })),
     });
   }
+  const familyToday = await familyTodayView(db, ALL);
   const health = rHealth.results, events = rEvents.results, alloc = rAlloc.results;
   const cov = (m, tf) => { const c = kv[`cov:${m}:${tf}`] || {}; const v = Object.values(c); return { symbols: v.length, from: v.length ? Math.min(...v.map((x) => x.min)) : null, to: v.length ? Math.max(...v.map((x) => x.max)) : null }; };
   const sl = strategies.filter((x) => x.sleeve === 'aggressive' && x.paper);
@@ -127,6 +129,7 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
     },
     decision: kv['decision:current'] || null,
     members: membersView(kv['family:members']),
+    familyToday, // 2026-11-27 #F-016: 가족 장부 규칙의 마지막 종가 기준 판정(조건별 숫자). 실패하면 null
     criteria: (() => { const c = criteriaView(gates); return { version: c.version, hash: c.hash, goal: c.goal, plain: c.plain, history: c.history, log: [...(kv['criteria:log'] || [])].reverse().slice(0, 20) }; })(),
     aiScorecard: kv['ai:scorecard'] ? (({ scored, ...x }) => x)(kv['ai:scorecard']) : null,
     aiCross: kv['ai:cross'] ? { n: kv['ai:cross'].n, signAgree: kv['ai:cross'].signAgree, model: kv['ai:cross'].model, at: kv['ai:cross'].at } : null,
@@ -156,6 +159,29 @@ export async function overview(env, now = Math.floor(Date.now() / 1000)) {
     assumptions: { krxCommission: DEFAULT_COSTS.krx.commission, krxSellTaxStock: DEFAULT_COSTS.krx.sellTaxStock, krxSellTaxEtf: DEFAULT_COSTS.krx.sellTaxEtf, etfTaxNote: 'ETF 매도세는 출처마다 설명이 달라 "면제(0%)"로 가정함. 설정으로 바꿀 수 있음.', upbitFee: DEFAULT_COSTS.crypto.commission, upbitMinOrder: DEFAULT_COSTS.crypto.minOrderKrw, slippage: { krx: DEFAULT_COSTS.krx.slippage, crypto: DEFAULT_COSTS.crypto.slippage } },
     gates,
   };
+}
+
+/**
+ * 가족 장부 규칙(familySignal)을 마지막 일봉 종가로 돌린 결과 — 화면의 '오늘 판단 근거'.
+ * 장부가 거래할 때 쓰는 것과 같은 함수·같은 길이(70개)의 종가. 종목은 가족 장부의 universe에서 가져온다.
+ * 읽는 행: 종목당 70개(PK 순서). 실패하면 null(화면은 '불러오는 중'으로).
+ */
+export async function familyTodayView(db, strategies) {
+  try {
+    const fam = strategies.find((s) => s.memberBook || /^family_/.test(s.id));
+    if (!fam) return null;
+    const syms = [...new Set(fam.universe || [])];
+    const rows = await db.batch(syms.map((sym) => db.prepare("SELECT t, c FROM candles WHERE market = 'krx' AND tf = '1d' AND sym = ? ORDER BY t DESC LIMIT 70").bind(sym)));
+    return {
+      syms: syms.map((sym, i) => {
+        const r = rows[i].results.slice().reverse();
+        const closes = r.map((x) => x.c);
+        return { sym, name: symName(sym), t: r.length ? r[r.length - 1].t : null, close: closes.length ? closes[closes.length - 1] : null, ...familySignalDetail(closes) };
+      }),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -53,6 +53,7 @@ button.ghost{background:none;border:1px solid var(--line);color:var(--ink2);bord
 .fam .mrow{display:grid;grid-template-columns:1fr 110px;gap:6px;align-items:center;margin:8px 0}.fam .acts{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 12px}.fam label.s{font-size:11.5px;color:var(--muted);display:block;margin-bottom:2px}
 button.danger{background:none;border:1px solid var(--bad);color:var(--bad);border-radius:10px;padding:6px 10px;font:inherit;font-size:12px;cursor:pointer}
 @media (max-width:520px){.books{grid-template-columns:1fr}}
+.famc .big{font-size:22px;font-weight:800;letter-spacing:-.4px;white-space:nowrap}.capbar{position:relative;margin-top:10px}.capbar .cap{position:absolute;top:-3px;width:2px;height:14px;margin-left:-1px;background:var(--ink);border-radius:1px}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--brand);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-left:6px;visibility:hidden}.spin.on{visibility:visible}@keyframes sp{to{transform:rotate(360deg)}}
 .skel{height:14px;border-radius:7px;background:linear-gradient(90deg,var(--chip),var(--line),var(--chip));background-size:200% 100%;animation:sk 1.2s ease-in-out infinite;margin:8px 0}@keyframes sk{to{background-position:-200% 0}}
 .nf{display:grid;gap:12px;margin-top:6px}.nf .lbl{font-size:12.5px;font-weight:700;color:var(--ink2);margin-bottom:4px}
@@ -174,10 +175,46 @@ function viewRules(){const C=DATA.criteria;if(!C)return '<div class="card"><div 
   h+='<h3>자동으로 감지한 변경 (값이 달라진 때)</h3>'+(C.log&&C.log.length?C.log.map(x=>'<div class="reason" style="margin:6px 0">'+kst(x.t)+' · '+esc(x.text)+'</div>').join(''):'<div class="empty">아직 기록이 없어요. 다음 전체 평가(6시간 안) 때 첫 기록이 생겨요.</div>');
   const L=DATA.decisionLog||[];h+='<h3>자동 결정 기록 (전략을 넣고 뺀 때)</h3>'+(L.length?L.map(c=>'<div class="reason">'+kst(c.t)+' · '+esc(c.text)+'</div>').join(''):'<div class="empty">아직 바뀐 결정이 없어요.</div>');
   return h+'</div>'}
+// ---- 2026-11-27 #F-016: 가족 장부 사람별 카드(PC 봇 계좌 화면에서 옮김) + 마지막 종가 기준 판단 근거 ----
+const FCK={above60:v=>'60일 평균보다 '+pct(v),trend:v=>'20일 평균이 60일 평균보다 '+pct(v),mom:v=>'60일 '+pct(v),vol:v=>'하루 평균 '+pabs(v,2)+' 움직임',jump:v=>'전날보다 '+pct(v)};
+function famSig(){const F=DATA.familyToday;return F&&Array.isArray(F.syms)&&F.syms.length?F:null}
+function famVerdict(x,held,top,room){if(!x.checks||!x.checks.length)return ['판단할 자료 부족',''];
+  if(held)return x.sig==='SELL'?['파는 조건 — 다음 거래일 시가에 팖','sell']:['계속 보유(더 사지는 않음)',''];
+  if(x.sig==='BUY')return room!=null&&room<=0.02?['사는 조건 맞음 — 투자 상한이 차서 안 삼','']:top?['사는 조건 맞음 — 다음 거래일 시가에 삼','buy']:['사는 조건 맞음 — 같은 날엔 점수 높은 한 종목만 사서 이번엔 안 삼',''];
+  if(x.sig==='WAIT')return ['오늘은 보류(전날 ±6% 넘게 움직임)',''];
+  const bad=x.checks.filter(c=>!c.ok).map(c=>c.need);return ['안 삼 — 안 맞는 조건: '+bad.join(', '),'']}
+function famTop(F,held){const b=F.syms.filter(x=>x.sig==='BUY'&&!(held&&held.has(x.sym))).sort((a,c)=>c.score-a.score);return b.length?b[0].sym:null}
+function famWhen(F){const t=F.syms.map(x=>x.t).filter(Boolean);return t.length?day(Math.max.apply(null,t)).slice(5)+' 종가 기준':'종가 기준'}
+function famBook(m){return DATA.strategies.find(s=>s.id===m.bookId)}
+function famCard(m,F){const s=famBook(m),p=s&&s.paper;let h='<div class="card famc"><div class="row"><div class="grow"><div class="name">'+esc(m.label)+' 장부</div><div class="meta">가상 돈 · 실제 주문 없음</div></div>';
+  if(!p)return h+'</div><div class="empty">새 장부가 다음 거래일부터 시작해요.</div></div>';
+  const inv=p.equity>0?Math.max(0,Math.min(1,(p.equity-p.cash)/p.equity)):0,cap=s.risk&&s.risk.minCash!=null?1-s.risk.minCash:null;
+  h+='<div style="text-align:right"><div class="big num">'+won(p.equity)+'</div><div class="num '+cls(p.ret)+'" style="font-weight:700">'+pct(p.ret)+' ('+(p.equity-p.initial>=0?'+':'')+Math.round(p.equity-p.initial).toLocaleString('ko-KR')+'원)</div></div></div>';
+  if(p.halted)h+='<div class="notice">⛔ 위험중단: '+esc(p.haltReason||'고점 대비 손실 한도')+' — 20거래일 쉬고 처음부터 다시 시작해요.</div>';
+  h+='<div class="capbar" aria-label="투자 비율 '+pabs(inv,0)+', 상한 '+pabs(cap,0)+'"><div class="bar"><span style="width:'+(inv*100).toFixed(1)+'%"></span></div>'+(cap!=null?'<i class="cap" style="left:'+(cap*100).toFixed(1)+'%"></i>':'')+'</div>';
+  h+='<div class="meta" style="margin-top:4px">투자 비율 <b>'+pabs(inv,0)+'</b>'+(cap!=null?' · 상한 '+pabs(cap,0)+'(나머지는 늘 현금)':'')+'</div>';
+  h+='<div class="stats"><div><div class="k">원금</div><div class="v num">'+won(p.initial)+'</div></div><div><div class="k">현금</div><div class="v num">'+won(p.cash)+'</div></div><div><div class="k">보유</div><div class="v num">'+(s.positions||[]).length+'종목</div></div><div><div class="k">가상 거래</div><div class="v num">'+(p.fills||0)+'번</div></div></div>';
+  h+='<div class="meta" style="margin-top:6px">같은 기간('+day(p.startT)+'부터) KODEX 200TR을 그냥 들고 있었으면 <b class="'+cls(p.benchRet)+'">'+pct(p.benchRet)+'</b></div>';
+  if((s.positions||[]).length)h+='<h3>보유</h3><table>'+s.positions.map(x=>'<tr><td>'+esc(x.name)+'</td><td class="r num">'+won(x.value)+'</td><td class="r num">'+pabs(x.weight,0)+'</td><td class="r num '+cls(x.pnlPct)+'">'+pct(x.pnlPct)+'</td></tr>').join('')+'</table>';
+  const held=new Set((s.positions||[]).map(x=>x.sym));
+  if(F){const top=famTop(F,held),room=cap!=null?Math.min(s.risk.maxPositionWeight??1,cap-inv):null;h+='<h3>오늘 판단 <span class="s">'+esc(famWhen(F))+'</span></h3>'+F.syms.map(x=>{const v=famVerdict(x,held.has(x.sym),x.sym===top&&!p.halted,room);return '<div class="reason"><b>'+esc(x.name)+'</b> — <span class="'+v[1]+'">'+esc(p.halted&&!held.has(x.sym)?'위험중단 중이라 안 삼':v[0])+'</span></div>'}).join('')}
+  if((s.pending||[]).length)h+='<h3>다음 거래일 시가 주문(가상)</h3>'+s.pending.map(o=>'<div class="reason"><span class="side '+(o.side==='BUY'?'buy':'sell')+'">'+(o.side==='BUY'?'삼':'팖')+'</span> '+esc(((s.universe||[]).find(u=>u.sym===o.sym)||{}).name||o.sym)+' '+esc(o.reason||'')+'</div>').join('');
+  h+='<h3>최근 가상 주문</h3>'+((s.recent||[]).length?'<table>'+s.recent.slice(0,5).map(f=>'<tr><td class="meta num" style="width:84px">'+day(f.t).slice(5)+'</td><td><span class="side '+(f.side==='BUY'?'buy':'sell')+'">'+(f.side==='BUY'?'삼':'팖')+'</span> '+esc(f.name)+'</td><td class="r num">'+won(f.price*f.qty)+'</td></tr>').join('')+'</table>':'<div class="empty">아직 없어요 — 사는 조건이 맞은 날이 없었어요.</div>');
+  return h+'</div>'}
+function famRules(F){if(!F)return '<div class="card"><h3 style="margin-top:0">사는 조건 하나씩 보기</h3><div class="empty">판단 근거를 불러오는 중이에요(다음 갱신 때 나타나요).</div></div>';
+  let h='<div class="card"><h3 style="margin-top:0">사는 조건 하나씩 보기 <span class="s">'+esc(famWhen(F))+' · 가족 장부 모두 같은 규칙</span></h3><div class="meta">다섯 개가 <b>모두</b> 맞는 날에만 다음 거래일 시가에 삽니다. 하루 한 종목만, 이미 가진 종목은 더 안 사고, 판 뒤 10거래일 안에는 같은 종목을 다시 안 삽니다. 장부가 실제로 쓰는 계산과 같은 함수예요.</div>';
+  for(const x of F.syms){h+='<div style="margin-top:10px"><div class="name" style="font-size:14px">'+esc(x.name)+(x.close?' <span class="meta num">'+Math.round(x.close).toLocaleString('ko-KR')+'원</span>':'')+'</div>';
+    if(!x.checks||!x.checks.length){h+='<div class="empty">'+esc(x.reason||'자료 부족')+'</div></div>';continue}
+    h+='<ul class="checks">'+x.checks.map(c=>'<li><span class="ck '+(c.ok?'ok':'no')+'">'+(c.ok?'✓':'✗')+'</span>'+esc(c.need)+' <span class="meta num">('+esc((FCK[c.key]||pct)(c.value))+')</span></li>').join('')+'</ul></div>'}
+  return h+'</div>'}
+function famNow(){const M=DATA.members,F=famSig();if(!M||!M.members||!M.members.length)return '';
+  const rows=M.members.map(m=>{const s=famBook(m),p=s&&s.paper;if(!p)return '<div class="reason"><b>'+esc(m.label)+'</b> — 다음 거래일부터 시작</div>';const inv=p.equity>0?(p.equity-p.cash)/p.equity:0;return '<div class="reason"><b>'+esc(m.label)+'</b> 가상 '+won(p.equity)+' <span class="num '+cls(p.ret)+'">'+pct(p.ret)+'</span> · 투자 '+pabs(inv,0)+' · 같은 기간 KODEX 200TR 그냥 보유 <span class="num '+cls(p.benchRet)+'">'+pct(p.benchRet)+'</span></div>'}).join('');
+  let why='';if(F){const top=famTop(F);why='<div class="meta" style="margin-top:4px">'+esc(famWhen(F))+': '+F.syms.map(x=>esc(x.name)+' '+(x.sig==='BUY'?(x.sym===top?'사는 조건 맞음':'조건 맞음(한 종목만 삼)'):x.sig==='WAIT'?'보류':'안 삼(안 맞음: '+esc((x.checks||[]).filter(c=>!c.ok).map(c=>c.need).join(', ')||x.reason||'')+')')).join(' · ')+'</div>'}
+  return '<div class="card"><div class="row"><div class="grow"><div class="name">가족 장부 지금</div></div><button class="ghost" type="button" data-gotab="family">자세히</button></div>'+rows+why+'</div>'}
 function viewFamily(){const M=DATA.members;if(!M)return '<div class="card"><div class="empty">가족 설정을 불러오는 중이에요.</div></div>';const P=M.profiles||{};
   const st=id=>DATA.strategies.find(s=>s.id===id);
   const popt=(cur)=>Object.entries(P).map(([k,v])=>'<label><input type="radio" name="profile" value="'+k+'"'+(k===cur?' checked':'')+'>'+esc(v.label)+'</label>').join('');
-  let h='<div class="card fam"><h3 style="margin-top:0">가족 구성원과 금액 (가상 돈)</h3><div class="notice">여기서 바꾸는 것은 <b>가상 장부</b>뿐이에요. 금액이나 성향을 바꾸면 그 사람의 <b>새 장부가 다음 거래일부터</b> 새 금액으로 시작하고, 이전 장부는 기록으로 남아요. 이름만 바꾸면 장부는 그대로예요. 투자 한도 같은 세부 숫자는 성향에 따라 시스템이 정해요.</div><div id="fmsg" class="meta" role="status"></div>';
+  let h=M.members.map(m=>famCard(m,famSig())).join('')+famRules(famSig())+'<div class="card fam"><h3 style="margin-top:0">가족 구성원과 금액 (가상 돈)</h3><div class="notice">여기서 바꾸는 것은 <b>가상 장부</b>뿐이에요. 금액이나 성향을 바꾸면 그 사람의 <b>새 장부가 다음 거래일부터</b> 새 금액으로 시작하고, 이전 장부는 기록으로 남아요. 이름만 바꾸면 장부는 그대로예요. 투자 한도 같은 세부 숫자는 성향에 따라 시스템이 정해요.</div><div id="fmsg" class="meta" role="status"></div>';
   for(const m of M.members){const s=st(m.bookId),p=s&&s.paper;
     h+='<form data-mkey="'+esc(m.key)+'" style="border-top:1px dashed var(--line);padding-top:8px;margin-top:8px"><div class="mrow"><div><label class="s">이름</label><input type="text" name="label" maxlength="'+M.limits.nameMax+'" value="'+esc(m.label)+'" required></div><div><label class="s">금액(만 원)</label><input type="number" name="man" min="'+(M.limits.minKrw/10000)+'" max="'+(M.limits.maxKrw/10000)+'" step="1" value="'+(m.budgetKrw/10000)+'" required inputmode="numeric"></div></div><div class="opt" role="radiogroup" aria-label="성향">'+popt(m.profile)+'</div>';
     h+='<div class="meta" style="margin-top:6px">'+(p?'지금 장부: 가상 '+won(p.equity)+' ('+pct(p.ret)+') · '+day(p.startT)+' 시작':'새 장부가 다음 거래일부터 시작해요')+' · 투자 상한 '+pabs((P[m.profile]||{}).maxTotal,0)+' · 공격 장부 몫 상한 '+pabs((P[m.profile]||{}).growthMaxShare,0)+'</div><div class="acts"><button class="pri" type="submit">저장</button>'+(M.members.length>1?'<button class="danger" type="button" data-rm="'+esc(m.key)+'" data-name="'+esc(m.label)+'">빼기</button>':'')+'</div></form>'}
@@ -210,7 +247,7 @@ function weeklyCard(){const W=DATA.weeklyScorecard||[];if(!W.length)return '<div
 function viewRank(){const sorted=[...DATA.strategies].sort((a,b)=>(STAGE_ORDER[a.stage]-STAGE_ORDER[b.stage])||((b.paper?.ret??-9)-(a.paper?.ret??-9)));
   const main=sorted.filter(s=>s.sleeve!=='aggressive'),agg=sorted.filter(s=>s.sleeve==='aggressive');
   const sl=DATA.sleeve||{};const sleeveHead='<div class="card" style="border:2px solid var(--bad)"><div class="row"><div class="grow"><div class="name">⚠️ 고위험(잃어도 되는 돈만) · 공격형 슬롯</div><div class="meta">슬롯 전체가 '+pabs(sl.maxTotalLoss??0.3,0)+' 잃으면 모두 멈추고 자동으로 다시 채우지 않습니다. 나중 실거래 한도 '+won(sl.budgetKrw)+'.</div></div><div class="num '+cls(sl.ret)+'" style="font-weight:800">'+pct(sl.ret)+'</div></div>'+(sl.stopped?'<div class="notice">⛔ '+esc(sl.stopped)+'</div>':'')+'</div>';
-  return conclusionCard()+marketBar()+freshCard()+hero()+'<div class="notice">모든 숫자는 <b>가상 돈</b>(전략마다 따로 1,000만 원, 가족 장부는 '+esc(((DATA.members||{}).members||[]).map(m=>m.label+' '+Math.round(m.budgetKrw/10000)+'만').join('·')||'본인 10만·어머니 100만')+' 원)으로 한 모의투자입니다. 구성원·금액은 [가족] 탭에서 바꿀 수 있습니다. 실제 주문은 하지 않습니다. 카드를 누르면 자세한 내용(이유·보유·위험)이 보입니다.</div>'+pace()+aiCard()+main.map(stratCard).join('')+(agg.length?sleeveHead+agg.map(stratCard).join(''):'')+levCard()+weeklyCard()}
+  return conclusionCard()+famNow()+marketBar()+freshCard()+hero()+'<div class="notice">모든 숫자는 <b>가상 돈</b>(전략마다 따로 1,000만 원, 가족 장부는 '+esc(((DATA.members||{}).members||[]).map(m=>m.label+' '+Math.round(m.budgetKrw/10000)+'만').join('·')||'본인 10만·어머니 100만')+' 원)으로 한 모의투자입니다. 구성원·금액은 [가족] 탭에서 바꿀 수 있습니다. 실제 주문은 하지 않습니다. 카드를 누르면 자세한 내용(이유·보유·위험)이 보입니다.</div>'+pace()+aiCard()+main.map(stratCard).join('')+(agg.length?sleeveHead+agg.map(stratCard).join(''):'')+levCard()+weeklyCard()}
 function viewLife(){const col=(stages)=>DATA.strategies.filter(s=>stages.includes(s.stage));const chip=s=>'<span class="chip">'+esc(s.name)+'<small>'+esc(s.label)+(s.paper?' · '+pct(s.paper.ret):'')+'</small></span>';
   let h='<div class="card"><h3 style="margin-top:0">전략 수명주기</h3><div class="pipe"><div class="lane"><div class="step">1단계</div><h4>백테스트</h4>'+col(['backtest','bt_failed']).map(chip).join('')+'</div><div class="lane"><div class="step">2단계</div><h4>모의 검증</h4>'+col(['paper']).map(chip).join('')+'</div><div class="lane"><div class="step">3단계</div><h4>운영 점검 통과</h4>'+(col(['live_candidate']).map(chip).join('')||'<div class="empty">아직 없음</div>')+'</div></div>';
   h+='<div class="returnlane"><h4 style="margin:0 0 6px;font-size:12.5px">⛔ 중단 → 모의 복귀</h4>'+(col(['halted']).map(chip).join('')||'<div class="empty">없음</div>')+'</div>';
@@ -302,6 +339,7 @@ function render(){const v={rank:viewRank,rules:viewRules,family:viewFamily,life:
   const tg=$('#tg');if(tg)tg.addEventListener('click',async()=>{try{const r=await fetch('/api/admin/test-telegram',{method:'POST'});tg.textContent=(await r.json()).sent?'보냄 ✓':'실패'}catch(e){tg.textContent='실패'}});
   if(TAB==='data')loadNotify();
   wireAsk(m);if(TAB==='family')wireFamily(m);
+  m.querySelectorAll('[data-gotab]').forEach(b=>b.addEventListener('click',()=>{TAB=b.dataset.gotab;NDIRTY=false;safeRender();window.scrollTo(0,0)}));
   m.querySelectorAll('.strat').forEach(el=>el.addEventListener('click',e=>{if(e.target.closest('.detail'))return;el.classList.toggle('open');wireCharts(el,CURVES)}));
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===TAB))}
 // ---- robust loading: friendly message + retry with backoff, keep last good data (memory + localStorage) ----

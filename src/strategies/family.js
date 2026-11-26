@@ -34,6 +34,32 @@ export function familySignal(closes) {
   return ['SELL', score, `상승 추세 조건 미달(매수하지 않음), 60일 수익률 ${p(mom)}`];
 }
 
+/**
+ * 화면용(2026-11-27 #F-016): 같은 종가로 familySignal을 부르고, 사는 조건 4개와 ±6% 보류를 숫자와 함께 하나씩 보여 준다.
+ * 판정(sig)은 familySignal의 첫 값 그대로 — 따로 만든 판정이 아니다. BUY ⇔ 아래 checks가 전부 ok.
+ */
+export function familySignalDetail(closes) {
+  const [sig, score, reason] = familySignal(closes);
+  if (closes.length < 65) return { sig, score, reason, checks: [] };
+  const n = closes.length, c = closes[n - 1];
+  const sma20 = sma(closes.slice(-20), 20), sma60 = sma(closes.slice(-60), 60);
+  const ch = [];
+  for (let i = n - 19; i < n; i++) ch.push(Math.log(closes[i] / closes[i - 1]));
+  const mean = ch.reduce((a, b) => a + b, 0) / ch.length;
+  const vol = Math.sqrt(ch.reduce((a, b) => a + (b - mean) ** 2, 0) / ch.length);
+  const mom = closes[n - 1] / closes[n - 61] - 1;
+  const jump = closes[n - 1] / closes[n - 2] - 1;
+  const r = (x, d = 4) => Math.round(x * 10 ** d) / 10 ** d;
+  const checks = [
+    { key: 'above60', ok: c > sma60, value: r(c / sma60 - 1), need: '종가가 60일 평균보다 위' },
+    { key: 'trend', ok: sma20 > sma60, value: r(sma20 / sma60 - 1), need: '20일 평균이 60일 평균보다 위' },
+    { key: 'mom', ok: mom > 0.025, value: r(mom), need: '60일 수익률 +2.5% 넘음' },
+    { key: 'vol', ok: Number.isFinite(vol) && vol <= 0.035, value: r(vol), need: '20일 변동성 3.5% 이하' },
+    { key: 'jump', ok: Math.abs(jump) <= 0.06, value: r(jump), need: '전날보다 ±6% 넘게 안 움직임' },
+  ];
+  return { sig, score, reason, checks };
+}
+
 export function makeFamily({ id, who, cash, maxTotal, maxAsset, drawdown }) {
   return {
     id, family: id.replace(/_v\d+$/, ''), version: 1, cadence: 'slow', priorTrials: 0, researchOnly: true,
