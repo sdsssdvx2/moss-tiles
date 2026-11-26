@@ -11,6 +11,7 @@ import { DISCLAIMER } from '../core/decision.js';
 import { symName } from '../config.js';
 import { gatesFrom } from './lifecycle.js';
 import { allStrategies } from '../strategies/index.js';
+import { familySignal } from '../strategies/family.js';
 
 // 2026-11-23: "왜 이걸 샀어?"에 실제 거래 기록(가상 체결과 그때 규칙이 적은 이유)으로 답한다.
 export const TRADE_DAYS = 14, TRADE_MAX = 40;
@@ -27,6 +28,66 @@ export async function recentTrades(env, kv, now) {
       return { id, strategy: n.name, sym: r.sym, symName: symName(r.sym), side: r.side, act, t: r.t, when: kstHM(r.t), reason: String(r.reason || '').slice(0, 200) };
     });
   } catch (_) { return []; }
+}
+// 2026-11-26 (#F-015): "수익률 어때?"에 '+0.0%'만 말하지 않게 — 장부별 가상 수익·거래 수·그냥 들고 있기·가족 장부가 안 산 까닭.
+const FAMILY_SYMS = ['278530', '379800'];
+/** 모의 장부 요약(첫 평가 → 마지막 평가). 실패하면 null — 답을 막지 않는다. */
+export async function ledgerSummary(env, kv, now) {
+  try {
+    const { results } = await env.DB.prepare(`SELECT r.id,
+      (SELECT COUNT(*) FROM fills f WHERE f.run_id = r.id) nf,
+      (SELECT equity FROM equity e WHERE e.run_id = r.id ORDER BY t ASC LIMIT 1) e0,
+      (SELECT equity FROM equity e WHERE e.run_id = r.id ORDER BY t DESC LIMIT 1) e1,
+      (SELECT bench FROM equity e WHERE e.run_id = r.id ORDER BY t ASC LIMIT 1) b0,
+      (SELECT bench FROM equity e WHERE e.run_id = r.id ORDER BY t DESC LIMIT 1) b1,
+      (SELECT MIN(t) FROM equity e WHERE e.run_id = r.id) t0
+      FROM runs r WHERE r.mode = 'paper'`).all();
+    const meta = Object.fromEntries(allStrategies(kv).map((s) => [s.id, s]));
+    const rows = (results || []).filter((r) => r.e0 > 0 && r.e1 != null).map((r) => {
+      const id = String(r.id).replace(/:paper$/, ''), s = meta[id] || {};
+      return { id, name: s.name || id, trades: r.nf | 0, ret: r.e1 / r.e0 - 1, bench: r.b0 > 0 ? r.b1 / r.b0 - 1 : null, t0: r.t0, family: /^family_/.test(id), benchOnly: !!s.benchmarkOnly, market: s.market || null };
+    });
+    if (!rows.length) return null;
+    const traded = rows.filter((r) => r.trades > 0).sort((a, b) => b.ret - a.ret);
+    const hold = (re) => rows.find((r) => re.test(r.id));
+    const fam = rows.filter((r) => r.family);
+    let familySig = null;
+    if (fam.length) {
+      const t0 = Math.min(...fam.map((r) => r.t0));
+      familySig = { since: t0, days: 0, buyDays: 0, today: [] };
+      for (const sym of FAMILY_SYMS) {
+        const { results: c } = await env.DB.prepare(`SELECT t, c FROM candles WHERE market = 'krx' AND tf = '1d' AND sym = ? ORDER BY t DESC LIMIT 120`).bind(sym).all();
+        const bars = (c || []).reverse(), closes = bars.map((b) => b.c);
+        let n = 0, buys = 0, last = null;
+        for (let i = 64; i < bars.length; i++) {
+          if (bars[i].t < t0) continue;
+          last = familySignal(closes.slice(Math.max(0, i - 69), i + 1));
+          n++; if (last[0] === 'BUY') buys++;
+        }
+        familySig.days = Math.max(familySig.days, n); familySig.buyDays += buys;
+        if (last) familySig.today.push(`${symName(sym)} ${last[0] === 'BUY' ? '사는 조건 맞음' : last[2]}`);
+      }
+    }
+    return { n: rows.length, traded: traded.length, idle: rows.length - traded.length, best: traded[0] || null, worst: traded.at(-1) || null,
+      krxHold: hold(/^krx_bh_/), cryptoHold: hold(/^crypto_bh_/), family: fam, familySig };
+  } catch (_) { return null; }
+}
+const FIRST_VERDICT = Date.UTC(2026, 11, 5, 20, 17) / 1000; // 2026-12-06 05:17 KST 첫 사전 등록 후보 판정
+function ledgerLines(lg, now) {
+  if (!lg) return [];
+  const L = [`가상 장부 ${lg.n}개 중 ${lg.traded}개가 실제로 가상 거래를 했고, ${lg.idle}개는 사는 조건이 한 번도 안 맞아 현금으로 기다려서 수익이 0%예요(잃지도 벌지도 않음)`];
+  if (lg.best) L.push(`가장 좋은 장부: ${lg.best.name} ${p1(lg.best.ret)} / 가장 나쁜 장부: ${lg.worst.name} ${p1(lg.worst.ret)} (모의 시작부터 지금까지, 가상 돈)`);
+  const h = [lg.krxHold && `국내 주식 ETF(KODEX 200TR) ${p1(lg.krxHold.ret)}`, lg.cryptoHold && `비트코인 ${p1(lg.cryptoHold.ret)}`].filter(Boolean);
+  if (h.length) L.push(`같은 기간 아무 판단 없이 그냥 사서 들고 있었으면: ${h.join(', ')}`);
+  if (lg.family.length) {
+    const s = lg.familySig;
+    L.push(`가족 장부(${lg.family.map((f) => `${f.name.replace(/^가족 장부\((.*?)\).*/, '$1')} ${f.trades ? `${f.trades}번 거래, ${p1(f.ret)}` : '아직 한 번도 안 삼, 0%'}`).join(' / ')})`
+      + (s ? `: 사는 조건(종가가 60일 평균 위, 20일 평균이 60일 평균 위, 60일 수익률 2.5% 넘음, 하루 흔들림 3.5% 이하)이 모의 시작 뒤 ${s.days}거래일 동안 ${s.buyDays ? `${s.buyDays}번 맞았어요` : '한 번도 안 맞았어요 — 규칙대로 현금으로 기다린 것이에요'}` : '')
+      + (lg.family[0].bench != null ? `. 같은 기간 KODEX 200TR을 그냥 들고 있었으면 ${p1(lg.family[0].bench)}` : ''));
+    if (s?.today.length) L.push(`가족 장부 오늘 신호: ${s.today.join(' / ')}`);
+  }
+  if (now < FIRST_VERDICT + 86400) L.push('미리 등록한 새 전략 후보의 첫 판정은 12-06(일) 새벽이에요');
+  return L;
 }
 const TRADE_RE = /(?<!안\s?)샀|팔았|매수했|매도했|사들|(?<!실)거래|체결|진입|청산|왜\s*(샀|산|팔|매수|매도)/;
 /** 질문에 나온 종목·전략으로 거래를 고른다. 없으면 최근 것. */
@@ -64,6 +125,7 @@ export async function askContext(env, kv, now) {
     guard: g ? { damp: g.damp || null, altHold: g.altHold || null } : null,
     criteriaLog: (kv['criteria:log'] || []).slice(-5),
     trades: await recentTrades(env, kv, now),
+    ledgers: await ledgerSummary(env, kv, now),
   };
 }
 
@@ -90,6 +152,8 @@ export function factLines(ctx) {
   if (ctx.guard?.damp) L.push(`코인 시장 신호: 새 매수 ${ctx.guard.damp.factor === 0 ? '보류' : `×${ctx.guard.damp.factor}`} 상태`);
   for (const x of (ctx.trades || []).slice(0, 12)) L.push(`가상 거래 기록: ${x.when} [${x.strategy}] ${x.symName} ${x.act} — 그때 규칙이 적은 이유: ${x.reason}`);
   if (ctx.trades && !ctx.trades.length) L.push(`최근 ${TRADE_DAYS}일 동안 가상 거래 기록 없음`);
+  L.push(...ledgerLines(ctx.ledgers, ctx.now));
+  if (ctx.ledgers) L.push('수익률을 물으면: 위 "가장 가까운 후보"의 수익 하나만 말하지 말고, 장부 몇 개가 거래했는지·가장 좋은/나쁜 장부·그냥 들고 있었으면 얼마·가족 장부가 왜 0%인지를 함께 말한다');
   return L.filter(Boolean);
 }
 
@@ -102,6 +166,7 @@ const TOPICS = [
   { key: 'change', re: /바뀌|변경|이력|버전/ },
   { key: 'risk', re: /위험|손해|손실|잃|안전/ },
   { key: 'real', re: /실제\s*돈|실거래|진짜|연결|주문/ },
+  { key: 'return', re: /수익|이익|손익|벌었|벌고|성적|성과|몇\s*퍼|%|얼마/ },
 ];
 
 /** AI 없이도 항상 줄 수 있는 답(사실 요약을 주제에 맞게 골라 이어 붙임). */
@@ -117,6 +182,10 @@ export function ruleAnswer(q, ctx) {
       for (const x of tr) out.push(`· ${x.when} [${x.strategy}] ${x.symName} ${x.act} — 이유: ${x.reason}`);
       out.push('이유는 그 장부의 규칙이 그때 숫자를 보고 스스로 적은 것이에요. 규칙은 미리 정해져 있고, 결과를 보고 바꾸지 않아요.');
     } else out.push(`최근 ${TRADE_DAYS}일 동안 가상 장부가 사고판 기록이 없어요. 규칙의 사는 조건이 맞지 않아 현금으로 기다리는 중이에요.`);
+  }
+  if (hit.includes('return')) {
+    const lines = ledgerLines(ctx.ledgers, ctx.now);
+    out.push(...(lines.length ? lines.map((l) => `· ${l}`) : ['아직 가상 장부의 평가 기록이 없어요.']));
   }
   const sec = (title) => c.plain.find((x) => x.title.startsWith(title))?.lines || [];
   if (!hit.length || hit.includes('buy') || hit.includes('real')) {
