@@ -283,6 +283,7 @@ export async function krxNavBackfillTask(env, kv, now, { perTick = 3, fetcher = 
   }
   if (D !== start) { kv['navbf:cur'] = D; stmts.push(kvSetStmt(env.DB, 'navbf:cur', D)); }
   for (let i = 0; i < stmts.length; i += 500) await env.DB.batch(stmts.slice(i, i + 500));
+  if (did) await healthOk(env.DB, 'krx:navbf'); // 2026-11-27: 성공도 적어야 데이터 탭이 옛 오류(✗)만 보여 주지 않음
   return did;
 }
 
